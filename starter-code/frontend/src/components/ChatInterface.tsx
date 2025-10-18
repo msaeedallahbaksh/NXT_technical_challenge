@@ -28,6 +28,68 @@ const ChatInterface: React.FC = () => {
     }
   }, [sessionId, createSession]);
 
+  // Handle function call execution
+  const handleFunctionCall = async (functionCall: any) => {
+    console.log('Executing function call:', functionCall);
+    
+    const { function: functionName, parameters, messageId } = functionCall;
+    
+    if (!functionName || !sessionId) {
+      console.error('Invalid function call or missing session ID');
+      return;
+    }
+
+    try {
+      // If no messageId (user-initiated), create a new message
+      let currentMessageId = messageId;
+      if (!currentMessageId) {
+        currentMessageId = addFunctionCallMessage({
+          name: functionName,
+          parameters
+        });
+      }
+
+      // Call the backend function endpoint
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/functions/${functionName}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...parameters,
+          session_id: sessionId
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Function call failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('Function result:', result);
+      
+      // Update the message with the result
+      updateMessage(currentMessageId!, {
+        function_call: {
+          name: functionName,
+          parameters,
+          result
+        },
+        content: `Completed ${functionName}`
+      });
+      
+    } catch (error) {
+      console.error('Error executing function call:', error);
+      
+      // Update message with error
+      if (messageId && updateMessage) {
+        updateMessage(messageId, {
+          content: `Error executing ${functionName}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
+      }
+    }
+  };
+
   // SSE Connection
   const {
     messages,
@@ -36,15 +98,15 @@ const ChatInterface: React.FC = () => {
     clearMessages,
     reconnect,
     error,
-    isTyping
+    isTyping,
+    updateMessage,
+    addFunctionCallMessage
   } = useSSEConnection({
     sessionId: sessionId || '',
     onMessage: (message) => {
       console.log('New message:', message);
     },
-    onFunctionCall: (functionCall) => {
-      console.log('Function call:', functionCall);
-    },
+    onFunctionCall: handleFunctionCall, // Now actually executes the function!
     onError: (error) => {
       console.error('SSE error:', error);
     }
@@ -161,9 +223,31 @@ const ChatInterface: React.FC = () => {
             <FunctionCallRenderer
               key={msg.id}
               functionCall={msg.function_call!}
-              onInteraction={(action, data) => {
+              onInteraction={async (action, data) => {
                 console.log('Function interaction:', action, data);
-                // Handle interactions like "add to cart" from product cards
+                
+                // Handle different interaction types
+                if (action === 'add_to_cart' && data.product_id) {
+                  // Execute add_to_cart function
+                  await handleFunctionCall({
+                    function: 'add_to_cart',
+                    parameters: {
+                      product_id: data.product_id,
+                      quantity: data.quantity || 1
+                    },
+                    messageId: null // Will create new message
+                  });
+                } else if (action === 'select_product' && data.product_id) {
+                  // Execute show_product_details function
+                  await handleFunctionCall({
+                    function: 'show_product_details',
+                    parameters: {
+                      product_id: data.product_id,
+                      include_recommendations: true
+                    },
+                    messageId: null // Will create new message
+                  });
+                }
               }}
             />
           ))

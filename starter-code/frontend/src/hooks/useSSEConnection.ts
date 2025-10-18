@@ -42,6 +42,8 @@ export interface SSEConnectionHook {
   reconnect: () => void;
   error: string | null;
   isTyping: boolean;
+  updateMessage: (messageId: string, updates: Partial<Message>) => void;
+  addFunctionCallMessage: (functionCall: { name: string; parameters: any; result?: any }) => string;
 }
 
 export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHook => {
@@ -127,9 +129,13 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
         handleCompletion(data);
       });
 
-      eventSource.addEventListener('error', (event) => {
-        const data = JSON.parse(event.data);
-        handleErrorEvent(data);
+      eventSource.addEventListener('error', (event: any) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleErrorEvent(data);
+        } catch (err) {
+          console.error('Failed to parse error event:', err);
+        }
       });
 
       eventSource.onerror = (event) => {
@@ -213,8 +219,9 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
   const handleFunctionCall = (data: any) => {
     const { function: functionName, parameters, result } = data;
     
+    const messageId = `func_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const message: Message = {
-      id: `func_${Date.now()}`,
+      id: messageId,
       type: 'function_call',
       content: `Executing ${functionName}`,
       timestamp: new Date(),
@@ -226,8 +233,40 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
     };
 
     addMessage(message);
-    onFunctionCall?.(data);
+    
+    // Call the callback to execute the function
+    // Pass the message ID so the callback can update the message with results
+    onFunctionCall?.({ ...data, messageId });
   };
+  
+  /**
+   * Update a message with new data (e.g., function call results)
+   */
+  const updateMessage = useCallback((messageId: string, updates: Partial<Message>) => {
+    setMessages(prev => prev.map(msg => 
+      msg.id === messageId ? { ...msg, ...updates } : msg
+    ));
+  }, []);
+
+  /**
+   * Add a new function call message (for user-initiated function calls)
+   */
+  const addFunctionCallMessage = useCallback((functionCall: { name: string; parameters: any; result?: any }): string => {
+    const messageId = `func_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const message: Message = {
+      id: messageId,
+      type: 'function_call',
+      content: `Executing ${functionCall.name}`,
+      timestamp: new Date(),
+      function_call: {
+        name: functionCall.name,
+        parameters: functionCall.parameters,
+        result: functionCall.result
+      }
+    };
+    addMessage(message);
+    return messageId;
+  }, [addMessage]);
 
   /**
    * Handle completion events
@@ -349,14 +388,15 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
     setConnectionStatus('disconnected');
   };
 
-  // Auto-connect on mount
+  // Auto-connect on mount (only once)
   useEffect(() => {
     connect();
 
     return () => {
       disconnect();
     };
-  }, [connect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]); // Only reconnect if sessionId changes
 
   return {
     messages,
@@ -365,6 +405,8 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
     clearMessages,
     reconnect,
     error,
-    isTyping
+    isTyping,
+    updateMessage,
+    addFunctionCallMessage
   };
 };

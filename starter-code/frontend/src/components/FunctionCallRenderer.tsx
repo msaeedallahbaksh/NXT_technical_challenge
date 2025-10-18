@@ -1,11 +1,16 @@
 /**
  * Function Call Renderer - Dynamically renders components based on AI function calls
  * 
- * TODO: This is a key component that maps AI function calls to React components.
- * Implement the component mapping and rendering logic.
+ * This is the "magic" component that converts AI function calls into React UI components.
+ * When the AI calls a function like "search_products", this component renders it as a 
+ * visual product grid instead of just JSON data.
  */
 
 import React from 'react';
+import SearchResults from './SearchResults';
+import CartNotification from './CartNotification';
+import RecommendationGrid from './RecommendationGrid';
+import ProductDetailView from './ProductDetailView';
 
 interface FunctionCall {
   name: string;
@@ -18,47 +23,10 @@ interface FunctionCallRendererProps {
   onInteraction?: (action: string, data: any) => void;
 }
 
-// TODO: Implement these components or create placeholder components
-const SearchResults: React.FC<any> = ({ products, onProductSelect }) => (
-  <div className="border rounded-lg p-4 bg-blue-50">
-    <h3 className="font-medium text-blue-900 mb-2">Search Results</h3>
-    <p className="text-sm text-blue-700">
-      TODO: Implement SearchResults component - Found {products?.length || 0} products
-    </p>
-  </div>
-);
-
-const ProductCard: React.FC<any> = ({ product, onAddToCart }) => (
-  <div className="border rounded-lg p-4 bg-green-50">
-    <h3 className="font-medium text-green-900 mb-2">Product Details</h3>
-    <p className="text-sm text-green-700">
-      TODO: Implement ProductCard component - {product?.name || 'Product'}
-    </p>
-  </div>
-);
-
-const CartNotification: React.FC<any> = ({ cartItem }) => (
-  <div className="border rounded-lg p-4 bg-purple-50">
-    <h3 className="font-medium text-purple-900 mb-2">Added to Cart</h3>
-    <p className="text-sm text-purple-700">
-      TODO: Implement CartNotification component - {cartItem?.product_name || 'Item'}
-    </p>
-  </div>
-);
-
-const RecommendationGrid: React.FC<any> = ({ recommendations }) => (
-  <div className="border rounded-lg p-4 bg-orange-50">
-    <h3 className="font-medium text-orange-900 mb-2">Recommendations</h3>
-    <p className="text-sm text-orange-700">
-      TODO: Implement RecommendationGrid component - {recommendations?.length || 0} recommendations
-    </p>
-  </div>
-);
-
 // Function call mapping - Maps AI function names to React components
 const FunctionComponents: Record<string, React.ComponentType<any>> = {
   search_products: SearchResults,
-  show_product_details: ProductCard,
+  show_product_details: ProductDetailView,
   add_to_cart: CartNotification,
   get_recommendations: RecommendationGrid
 };
