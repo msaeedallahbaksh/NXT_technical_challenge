@@ -67,6 +67,7 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const toolCallMapRef = useRef<Map<string, string>>(new Map()); // Maps tool_call_id -> message_id
 
   // Base API URL
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
@@ -122,6 +123,11 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
       eventSource.addEventListener('function_call', (event) => {
         const data = JSON.parse(event.data);
         handleFunctionCall(data);
+      });
+
+      eventSource.addEventListener('function_result', (event) => {
+        const data = JSON.parse(event.data);
+        handleFunctionResult(data);
       });
 
       eventSource.addEventListener('completion', (event) => {
@@ -217,13 +223,20 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
    * Handle function call events
    */
   const handleFunctionCall = (data: any) => {
-    const { function: functionName, parameters, result } = data;
+    const { function: functionName, parameters, result, tool_call_id, requires_confirmation } = data;
     
+    // Store the message ID keyed by tool_call_id for result updates
     const messageId = `func_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    if (tool_call_id) {
+      toolCallMapRef.current.set(tool_call_id, messageId);
+    }
+    
     const message: Message = {
       id: messageId,
       type: 'function_call',
-      content: `Executing ${functionName}`,
+      content: requires_confirmation 
+        ? `AI suggests: ${functionName}` 
+        : `Executing ${functionName}`,
       timestamp: new Date(),
       function_call: {
         name: functionName,
@@ -234,9 +247,47 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
 
     addMessage(message);
     
-    // Call the callback to execute the function
-    // Pass the message ID so the callback can update the message with results
-    onFunctionCall?.({ ...data, messageId });
+    // For functions requiring confirmation, trigger callback so frontend can show UI
+    // For auto-execute functions, backend handles execution automatically
+    if (requires_confirmation) {
+      onFunctionCall?.({ ...data, messageId });
+    }
+  };
+  
+  /**
+   * Handle function result events from backend
+   */
+  const handleFunctionResult = (data: any) => {
+    const { function: functionName, result, tool_call_id } = data;
+    
+    // Find the message to update using tool_call_id
+    const messageId = tool_call_id ? toolCallMapRef.current.get(tool_call_id) : null;
+    
+    if (messageId) {
+      // Update the existing function call message with results
+      setMessages(prev => prev.map(msg => {
+        if (msg.id === messageId && msg.function_call) {
+          return {
+            ...msg,
+            content: result.success 
+              ? `Completed ${functionName}` 
+              : `Error in ${functionName}: ${result.error}`,
+            function_call: {
+              ...msg.function_call,
+              result
+            }
+          };
+        }
+        return msg;
+      }));
+      
+      // Clean up the mapping
+      if (tool_call_id) {
+        toolCallMapRef.current.delete(tool_call_id);
+      }
+    } else {
+      console.warn('No message found for tool_call_id:', tool_call_id);
+    }
   };
   
   /**
