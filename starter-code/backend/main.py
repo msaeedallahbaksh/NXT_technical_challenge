@@ -228,60 +228,190 @@ async def stream_chat(
                     ctx = await context_manager.get_context(session_id, session)
                     context_data = ctx.context_data if ctx else {}
                     
-                    # Stream AI response
-                    async for chunk in ai_agent.stream_response(
+                    # Stream AI response with real-time function calling
+                    async for response_chunk in ai_agent.stream_response(
                         message=message_data["message"],
                         context=context_data,
                         session_id=session_id
                     ):
                         if await request.is_disconnected():
                             break
+                        
+                        chunk_type = response_chunk.get("type")
+                        chunk_content = response_chunk.get("content")
+                        
+                        # Handle text content
+                        if chunk_type == "text":
+                            event = SSEEvent(
+                                event="text_chunk",
+                                data={"content": chunk_content, "partial": True},
+                                id=str(uuid.uuid4())
+                            )
+                            yield f"event: {event.event}\ndata: {json.dumps(event.data)}\nid: {event.id}\n\n"
+                        
+                        # Handle AI-detected tool calls
+                        elif chunk_type == "tool_call":
+                            function_name = chunk_content["function"]
+                            arguments = chunk_content["arguments"]
+                            tool_call_id = chunk_content["id"]
                             
-                        event = SSEEvent(
-                            event="text_chunk",
-                            data={"content": chunk, "partial": True},
-                            id=str(uuid.uuid4())
-                        )
-                        yield f"event: {event.event}\ndata: {json.dumps(event.data)}\nid: {event.id}\n\n"
-                    
-                    # Check if we should execute a function call (keyword-based detection)
-                    message_lower = message_data["message"].lower()
-                    
-                    # Detect recommendations
-                    if "recommend" in message_lower or "similar" in message_lower or "suggestion" in message_lower:
-                        # Extract what to base recommendations on (product or category)
-                        query_words = message_lower.split()
-                        stop_words = {"recommend", "recommendations", "similar", "suggestion", "suggestions", "show", "me", "for", "get", "find", "the", "a", "an", "please", "can", "you"}
-                        based_on = " ".join([w for w in query_words if w not in stop_words])
-                        
-                        if based_on:
+                            # Determine if function requires user confirmation
+                            # Read-only operations auto-execute, write operations need confirmation
+                            # I added confirmation for certain tools to demonstrate confirming important actions with the user before executing. For read only tools like search_product, I decided to execute it directly in the backend while streaming 'notifications' instead of jumping and forth between front and backend. This speeds up execution for read only tools. 
+                            REQUIRES_CONFIRMATION = ["add_to_cart"]
+                            needs_confirmation = function_name in REQUIRES_CONFIRMATION
+                            
+                            # Notify frontend that function is being called
                             function_call_event = SSEEvent(
                                 event="function_call",
                                 data={
-                                    "function": "get_recommendations",
-                                    "parameters": {"based_on": based_on, "session_id": session_id}
+                                    "function": function_name,
+                                    "parameters": arguments,
+                                    "tool_call_id": tool_call_id,
+                                    "requires_confirmation": needs_confirmation
                                 },
                                 id=str(uuid.uuid4())
                             )
                             yield f"event: {function_call_event.event}\ndata: {json.dumps(function_call_event.data)}\nid: {function_call_event.id}\n\n"
-                    
-                    # Detect search
-                    elif "search" in message_lower or "find" in message_lower:
-                        # Extract search query
-                        query_words = message_lower.split()
-                        stop_words = {"search", "find", "for", "me", "the", "a", "an", "please", "can", "you", "show"}
-                        query = " ".join([w for w in query_words if w not in stop_words])
+                            
+                            # Only auto-execute if confirmation not required
+                            if needs_confirmation:
+                                # Skip execution - frontend will handle via user interaction
+                                continue
+                            
+                            # Execute function directly (for read-only operations)
+                            try:
+                                function_result = None
+                                
+                                if function_name == "search_products":
+                                    # Execute search
+                                    query = arguments.get("query", "")
+                                    category = arguments.get("category")
+                                    limit = arguments.get("limit", 10)
+                                    
+                                    products = await product_service.search_products(
+                                        query=query,
+                                        category=category,
+                                        limit=limit,
+                                        session=session
+                                    )
+                                    
+                                    # Track search results in context
+                                    product_ids = [p.id for p in products]
+                                    await context_manager.track_search_results(
+                                        session_id, product_ids, session
+                                    )
+                                    
+                                    function_result = {
+                                        "success": True,
+                                        "data": {
+                                            "products": [p.model_dump(mode='json') for p in products],
+                                            "total": len(products),
+                                            "query": query
+                                        },
+                                        "context_updated": True
+                                    }
+                                
+                                elif function_name == "show_product_details":
+                                    product_id = arguments.get("product_id")
+                                    include_recs = arguments.get("include_recommendations", True)
+                                    
+                                    # Validate product_id is in recent context
+                                    ctx = await context_manager.get_context(session_id, session)
+                                    if ctx and not await context_manager.validate_product_id(
+                                        session_id, product_id, session
+                                    ):
+                                        function_result = {
+                                            "success": False,
+                                            "error": "Product not found in recent search results"
+                                        }
+                                    else:
+                                        product = await product_service.get_product_by_id(
+                                            product_id, session
+                                        )
+                                        
+                                        if not product:
+                                            function_result = {
+                                                "success": False,
+                                                "error": "Product not found"
+                                            }
+                                        else:
+                                            result_data = {"product": product.model_dump(mode='json')}
+                                            
+                                            if include_recs:
+                                                recommendations = await product_service.get_recommendations(
+                                                    based_on=product.category,
+                                                    limit=4,
+                                                    session=session
+                                                )
+                                                result_data["recommendations"] = [
+                                                    r.model_dump(mode='json') for r in recommendations
+                                                ]
+                                            
+                                            function_result = {
+                                                "success": True,
+                                                "data": result_data
+                                            }
+                                
+                                elif function_name == "get_recommendations":
+                                    based_on = arguments.get("based_on", "")
+                                    max_results = arguments.get("max_results", 5)
+                                    
+                                    recommendations = await product_service.get_recommendations(
+                                        based_on=based_on,
+                                        limit=max_results,
+                                        session=session
+                                    )
+                                    
+                                    function_result = {
+                                        "success": True,
+                                        "data": {
+                                            "recommendations": [r.model_dump(mode='json') for r in recommendations],
+                                            "based_on": based_on,
+                                            "total": len(recommendations)
+                                        }
+                                    }
+                                
+                                else:
+                                    function_result = {
+                                        "success": False,
+                                        "error": f"Unknown function: {function_name}"
+                                    }
+                                
+                                # Send function result back to frontend
+                                result_event = SSEEvent(
+                                    event="function_result",
+                                    data={
+                                        "function": function_name,
+                                        "tool_call_id": tool_call_id,
+                                        "result": function_result
+                                    },
+                                    id=str(uuid.uuid4())
+                                )
+                                yield f"event: {result_event.event}\ndata: {json.dumps(result_event.data)}\nid: {result_event.id}\n\n"
+                                
+                            except Exception as func_error:
+                                # Send function error
+                                error_result = SSEEvent(
+                                    event="error",
+                                    data={
+                                        "function": function_name,
+                                        "tool_call_id": tool_call_id,
+                                        "error": str(func_error),
+                                        "type": "function_error"
+                                    },
+                                    id=str(uuid.uuid4())
+                                )
+                                yield f"event: {error_result.event}\ndata: {json.dumps(error_result.data)}\nid: {error_result.id}\n\n"
                         
-                        if query:
-                            function_call_event = SSEEvent(
-                                event="function_call",
-                                data={
-                                    "function": "search_products",
-                                    "parameters": {"query": query, "session_id": session_id}
-                                },
+                        # Handle AI errors
+                        elif chunk_type == "error":
+                            error_event = SSEEvent(
+                                event="error",
+                                data={"error": chunk_content, "type": "ai_error"},
                                 id=str(uuid.uuid4())
                             )
-                            yield f"event: {function_call_event.event}\ndata: {json.dumps(function_call_event.data)}\nid: {function_call_event.id}\n\n"
+                            yield f"event: {error_event.event}\ndata: {json.dumps(error_event.data)}\nid: {error_event.id}\n\n"
                     
                     # Send completion event
                     completion_event = SSEEvent(

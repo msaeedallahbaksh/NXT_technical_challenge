@@ -18,6 +18,7 @@ class EventType(str, Enum):
     """SSE event types."""
     TEXT_CHUNK = "text_chunk"
     FUNCTION_CALL = "function_call"
+    FUNCTION_RESULT = "function_result"  # Results from function execution
     COMPLETION = "completion"
     ERROR = "error"
     CONTEXT_UPDATE = "context"

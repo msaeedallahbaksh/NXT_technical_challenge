@@ -39,23 +39,29 @@ class AIAgent(ABC):
 
 
 class OpenAIAgent(AIAgent):
-    """OpenAI-based AI agent implementation."""
+    """OpenAI-based AI agent implementation with native function calling."""
     
     def __init__(self):
         self.api_key = os.getenv("OPENAI_API_KEY")
-        self.model = os.getenv("AI_MODEL", "gpt-3.5-turbo")
+
+        self.model = os.getenv("AI_MODEL", "gpt-4o")
         self.base_url = "https://api.openai.com/v1"
         
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY environment variable required")
-    
     async def stream_response(
         self,
         message: str,
         context: Dict[str, Any],
         session_id: str
-    ) -> AsyncGenerator[str, None]:
-        """Stream response from OpenAI."""
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Stream response from OpenAI with function calling support.
+        
+        Yields dictionaries with keys:
+        - type: "text" | "tool_call" | "error"
+        - content: the actual content (text string or tool call dict)
+        """
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             headers = {
@@ -63,24 +69,41 @@ class OpenAIAgent(AIAgent):
                 "Content-Type": "application/json"
             }
             
+            # Build messages with context if available
+            messages = [
+                {
+                    "role": "system",
+                    "content": self._get_system_prompt()
+                }
+            ]
+            
+            # Add context if available
+            if context:
+                context_str = f"User context: {json.dumps(context)}"
+                messages.append({
+                    "role": "system",
+                    "content": context_str
+                })
+            
+            messages.append({
+                "role": "user",
+                "content": message
+            })
+            
             payload = {
                 "model": self.model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": self._get_system_prompt()
-                    },
-                    {
-                        "role": "user", 
-                        "content": message
-                    }
-                ],
+                "messages": messages,
+                "tools": self._get_function_definitions(), 
+                "tool_choice": "auto",  # Let AI decide when to call functions
                 "stream": True,
                 "temperature": 0.7,
-                "max_tokens": 500
+                "max_tokens": 800
             }
             
             try:
+                # Track tool calls across streaming chunks
+                current_tool_calls = {}
+                
                 async with client.stream("POST", f"{self.base_url}/chat/completions", 
                                         headers=headers, json=payload) as response:
                     response.raise_for_status()
@@ -96,13 +119,62 @@ class OpenAIAgent(AIAgent):
                                 data = json.loads(data_str)
                                 if "choices" in data and len(data["choices"]) > 0:
                                     delta = data["choices"][0].get("delta", {})
-                                    content = delta.get("content", "")
                                     
+                                    # Handle text content
+                                    content = delta.get("content")
                                     if content:
-                                        yield content
+                                        yield {
+                                            "type": "text",
+                                            "content": content
+                                        }
+                                    
+                                    # Handle tool calls
+                                    tool_calls = delta.get("tool_calls")
+                                    if tool_calls:
+                                        for tool_call in tool_calls:
+                                            idx = tool_call.get("index", 0)
+                                            
+                                            # Initialize tool call if new
+                                            if idx not in current_tool_calls:
+                                                current_tool_calls[idx] = {
+                                                    "id": tool_call.get("id", ""),
+                                                    "type": tool_call.get("type", "function"),
+                                                    "function": {
+                                                        "name": "",
+                                                        "arguments": ""
+                                                    }
+                                                }
+                                            
+                                            # Update tool call data
+                                            if "id" in tool_call:
+                                                current_tool_calls[idx]["id"] = tool_call["id"]
+                                            
+                                            if "function" in tool_call:
+                                                func = tool_call["function"]
+                                                if "name" in func:
+                                                    current_tool_calls[idx]["function"]["name"] = func["name"]
+                                                if "arguments" in func:
+                                                    current_tool_calls[idx]["function"]["arguments"] += func["arguments"]
                                         
                             except json.JSONDecodeError:
                                 continue
+                
+                # Yield completed tool calls
+                for tool_call in current_tool_calls.values():
+                    if tool_call["function"]["name"]:  # Only if we have a function name
+                        try:
+                            arguments = json.loads(tool_call["function"]["arguments"])
+                            yield {
+                                "type": "tool_call",
+                                "content": {
+                                    "id": tool_call["id"],
+                                    "function": tool_call["function"]["name"],
+                                    "arguments": arguments
+                                }
+                            }
+                        except json.JSONDecodeError as e:
+                            print(f"Failed to parse tool call arguments: {e}")
+                            print(f"Arguments string: {tool_call['function']['arguments']}")
                                 
             except httpx.HTTPStatusError as e:
                 error_msg = f"OpenAI API error: {e.response.status_code}"
@@ -110,10 +182,16 @@ class OpenAIAgent(AIAgent):
                     error_msg = "Invalid OpenAI API key. Please check your OPENAI_API_KEY in .env file."
                 elif e.response.status_code == 429:
                     error_msg = "OpenAI rate limit exceeded. Please try again later."
-                yield f"Error: {error_msg}"
+                yield {
+                    "type": "error",
+                    "content": error_msg
+                }
                 
             except Exception as e:
-                yield f"Error communicating with OpenAI: {str(e)}"
+                yield {
+                    "type": "error",
+                    "content": f"Error communicating with OpenAI: {str(e)}"
+                }
     
     async def execute_function(
         self,
@@ -143,31 +221,102 @@ class OpenAIAgent(AIAgent):
         """
     
     def _get_function_definitions(self) -> list:
-        """Get OpenAI function definitions."""
+        """Get OpenAI tool definitions for function calling."""
         return [
             {
-                "name": "search_products",
-                "description": "Search for products based on user query",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "category": {"type": "string"},
-                        "limit": {"type": "integer"}
-                    },
-                    "required": ["query"]
+                "type": "function",
+                "function": {
+                    "name": "search_products",
+                    "description": "Search for products in the catalog based on keywords, category, or other criteria. Use this when the user wants to find or browse products.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query (product name, keywords, features)"
+                            },
+                            "category": {
+                                "type": "string",
+                                "description": "Product category to filter by",
+                                "enum": ["electronics", "clothing", "home", "books", "sports", "beauty"]
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 10
+                            }
+                        },
+                        "required": ["query"]
+                    }
                 }
             },
             {
-                "name": "show_product_details",
-                "description": "Show detailed information about a product",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "product_id": {"type": "string"},
-                        "include_recommendations": {"type": "boolean"}
-                    },
-                    "required": ["product_id"]
+                "type": "function",
+                "function": {
+                    "name": "show_product_details",
+                    "description": "Get comprehensive details about a specific product including specifications, features, ratings, and recommendations. Use when the user asks for more information about a particular product.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "product_id": {
+                                "type": "string",
+                                "description": "The unique product ID (e.g., 'prod_001')"
+                            },
+                            "include_recommendations": {
+                                "type": "boolean",
+                                "description": "Whether to include similar product recommendations",
+                                "default": True
+                            }
+                        },
+                        "required": ["product_id"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "add_to_cart",
+                    "description": "Add a product to the user's shopping cart. Checks inventory and returns cart summary with totals.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "product_id": {
+                                "type": "string",
+                                "description": "The unique product ID to add"
+                            },
+                            "quantity": {
+                                "type": "integer",
+                                "description": "Quantity to add to cart",
+                                "default": 1,
+                                "minimum": 1
+                            }
+                        },
+                        "required": ["product_id"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_recommendations",
+                    "description": "Get product recommendations based on a product ID, category, or user preferences. Returns similar or related products.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "based_on": {
+                                "type": "string",
+                                "description": "Product ID or category to base recommendations on (e.g., 'prod_001' or 'electronics')"
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of recommendations",
+                                "default": 5,
+                                "minimum": 1,
+                                "maximum": 20
+                            }
+                        },
+                        "required": ["based_on"]
+                    }
                 }
             }
         ]
