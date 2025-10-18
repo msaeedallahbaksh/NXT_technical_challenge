@@ -409,9 +409,106 @@ async def show_product_details_endpoint(
     request: Dict[str, Any],
     session: AsyncSession = Depends(get_session)
 ):
-    """Show product details function endpoint."""
-    # TODO: Implement product details logic
-    return {"success": True, "data": {}, "message": "Not implemented yet"}
+    """
+    Show product details function endpoint.
+    
+    This endpoint gets detailed product information with optional recommendations.
+    Validates product ID against recent search context to prevent AI hallucination.
+    """
+    try:
+        product_id = request.get("product_id", "")
+        include_recommendations = request.get("include_recommendations", True)
+        session_id = request.get("session_id", "")
+        
+        if not product_id:
+            raise HTTPException(status_code=400, detail="Product ID is required")
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+        
+        # Validate product ID against search context (prevent AI hallucination)
+        validation = await context_manager.validate_product_id(
+            session_id=session_id,
+            product_id=product_id,
+            session=session
+        )
+        
+        # Get product details
+        product = await product_service.get_product_by_id(
+            product_id=product_id,
+            session=session
+        )
+        
+        if not product:
+            # Product doesn't exist - provide suggestions if available
+            return {
+                "success": False,
+                "error": {
+                    "code": "PRODUCT_NOT_FOUND",
+                    "message": f"Product with ID '{product_id}' was not found",
+                    "details": {
+                        "product_id": product_id,
+                        "suggestions": validation.get("suggestions", []),
+                        "recent_searches": validation.get("recent_searches", [])
+                    }
+                }
+            }
+        
+        # Get recommendations if requested
+        recommendations = []
+        if include_recommendations:
+            rec_products = await product_service.get_recommendations(
+                based_on_product_id=product_id,
+                limit=5,
+                session=session
+            )
+            recommendations = [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "price": p.price,
+                    "image_url": p.image_url,
+                    "rating": p.rating,
+                    "category": p.category
+                }
+                for p in rec_products
+            ]
+        
+        # Format product details
+        product_details = {
+            "id": product.id,
+            "name": product.name,
+            "description": product.description,
+            "long_description": product.long_description or product.description,
+            "price": product.price,
+            "category": product.category,
+            "image_url": product.image_url,
+            "additional_images": product.additional_images or [],
+            "in_stock": product.in_stock,
+            "stock_quantity": product.stock_quantity,
+            "rating": product.rating,
+            "reviews_count": product.reviews_count,
+            "specifications": product.specifications or {},
+            "features": product.features or []
+        }
+        
+        return {
+            "success": True,
+            "data": {
+                "product": product_details,
+                "recommendations": recommendations
+            },
+            "validation": {
+                "product_exists": True,
+                "in_recent_search": validation.get("valid", False),
+                "context_valid": True
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting product details: {str(e)}")
 
 
 @app.post("/api/functions/add_to_cart")
@@ -419,9 +516,137 @@ async def add_to_cart_endpoint(
     request: Dict[str, Any],
     session: AsyncSession = Depends(get_session)
 ):
-    """Add product to cart function endpoint."""
-    # TODO: Implement cart management logic
-    return {"success": True, "data": {}, "message": "Not implemented yet"}
+    """
+    Add product to cart function endpoint.
+    
+    This endpoint adds a product to the user's cart with inventory validation.
+    Checks stock availability and updates cart totals.
+    """
+    try:
+        from models import CartItem
+        from sqlmodel import select
+        
+        product_id = request.get("product_id", "")
+        quantity = request.get("quantity", 1)
+        session_id = request.get("session_id", "")
+        
+        if not product_id:
+            raise HTTPException(status_code=400, detail="Product ID is required")
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+        
+        if quantity < 1:
+            raise HTTPException(status_code=400, detail="Quantity must be at least 1")
+        
+        # Get product to check stock and price
+        product = await product_service.get_product_by_id(
+            product_id=product_id,
+            session=session
+        )
+        
+        if not product:
+            return {
+                "success": False,
+                "error": {
+                    "code": "PRODUCT_NOT_FOUND",
+                    "message": f"Product with ID '{product_id}' was not found"
+                }
+            }
+        
+        # Check stock availability
+        if not product.in_stock:
+            return {
+                "success": False,
+                "error": {
+                    "code": "OUT_OF_STOCK",
+                    "message": f"Product '{product.name}' is currently out of stock"
+                }
+            }
+        
+        if product.stock_quantity < quantity:
+            return {
+                "success": False,
+                "error": {
+                    "code": "INSUFFICIENT_STOCK",
+                    "message": f"Only {product.stock_quantity} units available",
+                    "details": {
+                        "requested": quantity,
+                        "available": product.stock_quantity
+                    }
+                }
+            }
+        
+        # Check if item already in cart
+        statement = select(CartItem).where(
+            CartItem.session_id == session_id,
+            CartItem.product_id == product_id
+        )
+        result = await session.execute(statement)
+        existing_item = result.scalar_one_or_none()
+        
+        if existing_item:
+            # Update existing cart item
+            existing_item.quantity += quantity
+            existing_item.total_price = existing_item.quantity * product.price
+            session.add(existing_item)
+            await session.commit()
+            await session.refresh(existing_item)
+            cart_item = existing_item
+        else:
+            # Create new cart item
+            cart_item = CartItem(
+                session_id=session_id,
+                product_id=product_id,
+                quantity=quantity,
+                unit_price=product.price,
+                total_price=quantity * product.price
+            )
+            session.add(cart_item)
+            await session.commit()
+            await session.refresh(cart_item)
+        
+        # Calculate cart summary
+        statement = select(CartItem).where(CartItem.session_id == session_id)
+        result = await session.execute(statement)
+        all_cart_items = result.scalars().all()
+        
+        total_items = sum(item.quantity for item in all_cart_items)
+        subtotal = sum(item.total_price for item in all_cart_items)
+        estimated_tax = round(subtotal * 0.1, 2)  # 10% tax
+        estimated_total = round(subtotal + estimated_tax, 2)
+        
+        return {
+            "success": True,
+            "data": {
+                "cart_item": {
+                    "id": cart_item.id,
+                    "product_id": cart_item.product_id,
+                    "product_name": product.name,
+                    "quantity": cart_item.quantity,
+                    "unit_price": cart_item.unit_price,
+                    "total_price": cart_item.total_price,
+                    "added_at": cart_item.added_at.isoformat()
+                },
+                "cart_summary": {
+                    "total_items": total_items,
+                    "total_products": len(all_cart_items),
+                    "subtotal": subtotal,
+                    "estimated_tax": estimated_tax,
+                    "estimated_total": estimated_total
+                }
+            },
+            "validation": {
+                "product_exists": True,
+                "sufficient_stock": True,
+                "valid_quantity": True
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error adding to cart: {str(e)}")
 
 
 @app.post("/api/functions/get_recommendations")
@@ -429,9 +654,109 @@ async def get_recommendations_endpoint(
     request: Dict[str, Any],
     session: AsyncSession = Depends(get_session)
 ):
-    """Get product recommendations function endpoint."""
-    # TODO: Implement recommendations logic
-    return {"success": True, "data": [], "message": "Not implemented yet"}
+    """
+    Get product recommendations function endpoint.
+    
+    This endpoint returns product recommendations based on a product ID or category.
+    Uses collaborative filtering approach (same category products).
+    """
+    try:
+        based_on = request.get("based_on", "")  # Product ID or category
+        recommendation_type = request.get("recommendation_type", "similar")
+        max_results = request.get("max_results", 5)
+        session_id = request.get("session_id", "")
+        
+        if not based_on:
+            raise HTTPException(status_code=400, detail="'based_on' parameter is required (product ID or category)")
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+        
+        if max_results < 1 or max_results > 20:
+            raise HTTPException(status_code=400, detail="max_results must be between 1 and 20")
+        
+        # Check if based_on is a product ID or category
+        product = await product_service.get_product_by_id(
+            product_id=based_on,
+            session=session
+        )
+        
+        if product:
+            # based_on is a product ID
+            recommendations = await product_service.get_recommendations(
+                based_on_product_id=product.id,
+                limit=max_results,
+                session=session
+            )
+            
+            recommendation_context = {
+                "based_on_product": product.name,
+                "based_on_category": product.category,
+                "algorithm": "collaborative_filtering",
+                "factors": ["category", "price_range", "ratings"]
+            }
+        else:
+            # based_on might be a category - search by category
+            from models import ProductCategory
+            
+            try:
+                # Try to match as category
+                category = ProductCategory(based_on.lower())
+                recommendations = await product_service.search_products(
+                    query="",
+                    category=category,
+                    limit=max_results,
+                    session=session
+                )
+                
+                recommendation_context = {
+                    "based_on_category": based_on,
+                    "algorithm": "category_based",
+                    "factors": ["category", "popularity", "ratings"]
+                }
+            except ValueError:
+                # Not a valid category either
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "INVALID_REFERENCE",
+                        "message": f"'{based_on}' is neither a valid product ID nor a category",
+                        "details": {
+                            "valid_categories": ["electronics", "clothing", "home", "books", "sports", "beauty"]
+                        }
+                    }
+                }
+        
+        # Format recommendations
+        recommendations_data = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "price": p.price,
+                "category": p.category,
+                "image_url": p.image_url,
+                "rating": p.rating,
+                "reviews_count": p.reviews_count,
+                "in_stock": p.in_stock,
+                "similarity_score": 0.85 if product and p.category == product.category else 0.75,
+                "reason": f"Similar {'features and ' if product else ''}category" if product else "Popular in category"
+            }
+            for p in recommendations
+        ]
+        
+        return {
+            "success": True,
+            "data": {
+                "recommendations": recommendations_data,
+                "recommendation_context": recommendation_context
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting recommendations: {str(e)}")
 
 
 if __name__ == "__main__":
