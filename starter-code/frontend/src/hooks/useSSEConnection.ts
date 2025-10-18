@@ -223,7 +223,7 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
    * Handle function call events
    */
   const handleFunctionCall = (data: any) => {
-    const { function: functionName, parameters, result, tool_call_id, requires_confirmation } = data;
+    const { function: functionName, parameters, result, tool_call_id } = data;
     
     // Store the message ID keyed by tool_call_id for result updates
     const messageId = `func_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -234,9 +234,7 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
     const message: Message = {
       id: messageId,
       type: 'function_call',
-      content: requires_confirmation 
-        ? `AI suggests: ${functionName}` 
-        : `Executing ${functionName}`,
+      content: `Executing ${functionName}`,
       timestamp: new Date(),
       function_call: {
         name: functionName,
@@ -246,12 +244,6 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
     };
 
     addMessage(message);
-    
-    // For functions requiring confirmation, trigger callback so frontend can show UI
-    // For auto-execute functions, backend handles execution automatically
-    if (requires_confirmation) {
-      onFunctionCall?.({ ...data, messageId });
-    }
   };
   
   /**

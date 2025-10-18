@@ -194,7 +194,7 @@ const ChatInterface: React.FC = () => {
       {/* Chat Messages */}
       <div 
         ref={chatContainerRef}
-        className="chat-container h-96 overflow-y-auto p-4 space-y-4"
+        className="chat-container h-[34rem] overflow-y-auto p-4 space-y-4"
       >
         {messages.length === 0 ? (
           <div className="text-center py-8">
@@ -213,45 +213,31 @@ const ChatInterface: React.FC = () => {
             </p>
           </div>
         ) : (
-          <MessageList messages={messages} />
+          <MessageList 
+            messages={messages}
+            onInteraction={async (action, data) => {
+              if (action === 'add_to_cart' && data.product_id) {
+                await handleFunctionCall({
+                  function: 'add_to_cart',
+                  parameters: {
+                    product_id: data.product_id,
+                    quantity: data.quantity || 1
+                  },
+                  messageId: null
+                });
+              } else if (action === 'select_product' && data.product_id) {
+                await handleFunctionCall({
+                  function: 'show_product_details',
+                  parameters: {
+                    product_id: data.product_id,
+                    include_recommendations: true
+                  },
+                  messageId: null
+                });
+              }
+            }}
+          />
         )}
-
-        {/* Function Call Results */}
-        {messages
-          .filter(msg => msg.type === 'function_call' && msg.function_call?.result)
-          .map(msg => (
-            <FunctionCallRenderer
-              key={msg.id}
-              functionCall={msg.function_call!}
-              onInteraction={async (action, data) => {
-                console.log('Function interaction:', action, data);
-                
-                // Handle different interaction types
-                if (action === 'add_to_cart' && data.product_id) {
-                  // Execute add_to_cart function
-                  await handleFunctionCall({
-                    function: 'add_to_cart',
-                    parameters: {
-                      product_id: data.product_id,
-                      quantity: data.quantity || 1
-                    },
-                    messageId: null // Will create new message
-                  });
-                } else if (action === 'select_product' && data.product_id) {
-                  // Execute show_product_details function
-                  await handleFunctionCall({
-                    function: 'show_product_details',
-                    parameters: {
-                      product_id: data.product_id,
-                      include_recommendations: true
-                    },
-                    messageId: null // Will create new message
-                  });
-                }
-              }}
-            />
-          ))
-        }
 
         {/* Typing Indicator */}
         {isTyping && (

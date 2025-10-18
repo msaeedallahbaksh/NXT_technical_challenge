@@ -8,19 +8,21 @@
 
 import React from 'react';
 import { Message } from '../hooks/useSSEConnection';
+import FunctionCallRenderer from './FunctionCallRenderer';
 
 interface MessageListProps {
   messages: Message[];
+  onInteraction?: (action: string, data: any) => void;
 }
 
-const MessageList: React.FC<MessageListProps> = ({ messages }) => {
+const MessageList: React.FC<MessageListProps> = ({ messages, onInteraction }) => {
   const renderMessage = (message: Message) => {
     switch (message.type) {
       case 'user':
         return (
-          <div key={message.id} className="flex items-start justify-end space-x-3">
+          <div key={message.id} className="flex items-start justify-end">
             <div className="flex-1 flex justify-end">
-              <div className="max-w-2xl">
+              <div className="max-w-3xl">
                 <div className="bg-blue-500 text-white rounded-lg px-4 py-2">
                   <p className="whitespace-pre-wrap">{message.content}</p>
                 </div>
@@ -29,19 +31,13 @@ const MessageList: React.FC<MessageListProps> = ({ messages }) => {
                 </div>
               </div>
             </div>
-            <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
-              <span className="text-white text-xs font-medium">You</span>
-            </div>
           </div>
         );
 
       case 'assistant':
         return (
-          <div key={message.id} className="flex items-start space-x-3">
-            <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-indigo-500 rounded-full flex items-center justify-center flex-shrink-0">
-              <span className="text-white text-xs font-medium">AI</span>
-            </div>
-            <div className="flex-1 max-w-2xl">
+          <div key={message.id} className="flex items-start">
+            <div className="flex-1 max-w-3xl">
               <div className="bg-gray-100 rounded-lg px-4 py-2">
                 <p className="text-gray-900 whitespace-pre-wrap">{message.content}</p>
               </div>
@@ -53,21 +49,20 @@ const MessageList: React.FC<MessageListProps> = ({ messages }) => {
         );
 
       case 'function_call':
-        // Function calls are rendered separately by FunctionCallRenderer
-        // This just shows a small indicator
         return (
-          <div key={message.id} className="flex items-start space-x-3">
-            <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0">
-              <span className="text-white text-xs">🔧</span>
-            </div>
-            <div className="flex-1 max-w-2xl">
+          <div key={message.id} className="flex items-start">
+            <div className="flex-1 max-w-3xl">
               <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2">
                 <p className="text-green-900 text-sm font-medium">
                   {message.content}
                 </p>
-                {message.function_call && (
-                  <div className="mt-1 text-xs text-green-700">
-                    Function: <span className="font-mono">{message.function_call.name}</span>
+                {/* Inline results under the same message (no function name, no icons) */}
+                {message.function_call?.result && (
+                  <div className="mt-3">
+                    <FunctionCallRenderer 
+                      functionCall={message.function_call}
+                      onInteraction={onInteraction}
+                    />
                   </div>
                 )}
               </div>
@@ -80,11 +75,8 @@ const MessageList: React.FC<MessageListProps> = ({ messages }) => {
 
       case 'error':
         return (
-          <div key={message.id} className="flex items-start space-x-3">
-            <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center flex-shrink-0">
-              <span className="text-white text-xs">⚠</span>
-            </div>
-            <div className="flex-1 max-w-2xl">
+          <div key={message.id} className="flex items-start">
+            <div className="flex-1 max-w-3xl">
               <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2">
                 <p className="text-red-900 font-medium text-sm">Error</p>
                 <p className="text-red-700 text-sm mt-1">{message.content}</p>

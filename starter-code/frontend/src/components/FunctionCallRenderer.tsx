@@ -47,9 +47,7 @@ const FunctionCallRenderer: React.FC<FunctionCallRendererProps> = ({
         <p className="text-sm text-gray-600">
           Function "{name}" not implemented
         </p>
-        <div className="mt-2 text-xs text-gray-500">
-          Parameters: {JSON.stringify(parameters, null, 2)}
-        </div>
+        {/* Hide verbose parameters by default for a cleaner UI */}
       </div>
     );
   }
@@ -63,7 +61,7 @@ const FunctionCallRenderer: React.FC<FunctionCallRendererProps> = ({
   // Render the appropriate component with function call data
   try {
     return (
-      <div className="my-4">
+      <div className="mt-3">
         <Component
           {...parameters}
           {...(result?.data || {})}
