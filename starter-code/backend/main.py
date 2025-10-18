@@ -244,16 +244,35 @@ async def stream_chat(
                         )
                         yield f"event: {event.event}\ndata: {json.dumps(event.data)}\nid: {event.id}\n\n"
                     
-                    # Check if we should execute a function call (for Part 1, we'll trigger on keywords)
-                    if "search" in message_data["message"].lower() or "find" in message_data["message"].lower():
-                        # Extract search query (simple keyword extraction for Part 1)
-                        query_words = message_data["message"].lower().split()
-                        # Remove common words to get the search query
+                    # Check if we should execute a function call (keyword-based detection)
+                    message_lower = message_data["message"].lower()
+                    
+                    # Detect recommendations
+                    if "recommend" in message_lower or "similar" in message_lower or "suggestion" in message_lower:
+                        # Extract what to base recommendations on (product or category)
+                        query_words = message_lower.split()
+                        stop_words = {"recommend", "recommendations", "similar", "suggestion", "suggestions", "show", "me", "for", "get", "find", "the", "a", "an", "please", "can", "you"}
+                        based_on = " ".join([w for w in query_words if w not in stop_words])
+                        
+                        if based_on:
+                            function_call_event = SSEEvent(
+                                event="function_call",
+                                data={
+                                    "function": "get_recommendations",
+                                    "parameters": {"based_on": based_on, "session_id": session_id}
+                                },
+                                id=str(uuid.uuid4())
+                            )
+                            yield f"event: {function_call_event.event}\ndata: {json.dumps(function_call_event.data)}\nid: {function_call_event.id}\n\n"
+                    
+                    # Detect search
+                    elif "search" in message_lower or "find" in message_lower:
+                        # Extract search query
+                        query_words = message_lower.split()
                         stop_words = {"search", "find", "for", "me", "the", "a", "an", "please", "can", "you", "show"}
                         query = " ".join([w for w in query_words if w not in stop_words])
                         
                         if query:
-                            # Execute search function
                             function_call_event = SSEEvent(
                                 event="function_call",
                                 data={
