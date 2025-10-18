@@ -340,7 +340,7 @@ async def stream_chat(
                                             
                                             if include_recs:
                                                 recommendations = await product_service.get_recommendations(
-                                                    based_on=product.category,
+                                                    based_on_product_id=product.id,
                                                     limit=4,
                                                     session=session
                                                 )
@@ -357,20 +357,55 @@ async def stream_chat(
                                     based_on = arguments.get("based_on", "")
                                     max_results = arguments.get("max_results", 5)
                                     
-                                    recommendations = await product_service.get_recommendations(
-                                        based_on=based_on,
-                                        limit=max_results,
+                                    # Check if based_on is a product ID or category
+                                    product = await product_service.get_product_by_id(
+                                        product_id=based_on,
                                         session=session
                                     )
                                     
-                                    function_result = {
-                                        "success": True,
-                                        "data": {
-                                            "recommendations": [r.model_dump(mode='json') for r in recommendations],
-                                            "based_on": based_on,
-                                            "total": len(recommendations)
+                                    if product:
+                                        # based_on is a product ID
+                                        recommendations = await product_service.get_recommendations(
+                                            based_on_product_id=product.id,
+                                            limit=max_results,
+                                            session=session
+                                        )
+                                        recommendation_context = {
+                                            "based_on_product": product.name,
+                                            "based_on_category": product.category
                                         }
-                                    }
+                                    else:
+                                        # based_on might be a category - search by category
+                                        from models import ProductCategory
+                                        try:
+                                            category = ProductCategory(based_on.lower())
+                                            recommendations = await product_service.search_products(
+                                                query="",
+                                                category=category,
+                                                limit=max_results,
+                                                session=session
+                                            )
+                                            recommendation_context = {
+                                                "based_on_category": based_on
+                                            }
+                                        except ValueError:
+                                            # Not a valid category or product ID
+                                            function_result = {
+                                                "success": False,
+                                                "error": f"'{based_on}' is not a valid product ID or category"
+                                            }
+                                            recommendations = []
+                                            recommendation_context = {}
+                                    
+                                    if recommendations:
+                                        function_result = {
+                                            "success": True,
+                                            "data": {
+                                                "recommendations": [r.model_dump(mode='json') for r in recommendations],
+                                                "recommendation_context": recommendation_context,
+                                                "total": len(recommendations)
+                                            }
+                                        }
                                 
                                 else:
                                     function_result = {
