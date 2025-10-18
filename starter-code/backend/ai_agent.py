@@ -57,10 +57,7 @@ class OpenAIAgent(AIAgent):
     ) -> AsyncGenerator[str, None]:
         """Stream response from OpenAI."""
         
-        # TODO: Implement OpenAI streaming with function calling
-        # This is a placeholder - implement actual OpenAI integration
-        
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
@@ -79,14 +76,44 @@ class OpenAIAgent(AIAgent):
                     }
                 ],
                 "stream": True,
-                "functions": self._get_function_definitions()
+                "temperature": 0.7,
+                "max_tokens": 500
             }
             
-            # Placeholder implementation
-            response_text = "I'm a placeholder OpenAI response. Please implement actual OpenAI integration."
-            for word in response_text.split():
-                yield word + " "
-                await asyncio.sleep(0.1)
+            try:
+                async with client.stream("POST", f"{self.base_url}/chat/completions", 
+                                        headers=headers, json=payload) as response:
+                    response.raise_for_status()
+                    
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:]  # Remove "data: " prefix
+                            
+                            if data_str == "[DONE]":
+                                break
+                            
+                            try:
+                                data = json.loads(data_str)
+                                if "choices" in data and len(data["choices"]) > 0:
+                                    delta = data["choices"][0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    
+                                    if content:
+                                        yield content
+                                        
+                            except json.JSONDecodeError:
+                                continue
+                                
+            except httpx.HTTPStatusError as e:
+                error_msg = f"OpenAI API error: {e.response.status_code}"
+                if e.response.status_code == 401:
+                    error_msg = "Invalid OpenAI API key. Please check your OPENAI_API_KEY in .env file."
+                elif e.response.status_code == 429:
+                    error_msg = "OpenAI rate limit exceeded. Please try again later."
+                yield f"Error: {error_msg}"
+                
+            except Exception as e:
+                yield f"Error communicating with OpenAI: {str(e)}"
     
     async def execute_function(
         self,
@@ -94,9 +121,14 @@ class OpenAIAgent(AIAgent):
         parameters: Dict[str, Any],
         session_id: str
     ) -> Dict[str, Any]:
-        """Execute function call."""
-        # TODO: Implement actual function execution
-        return {"status": "not_implemented", "function": function_name}
+        """Execute function call (delegated to backend endpoints)."""
+        # Function execution happens in the main.py endpoints
+        # This is just a placeholder for the agent interface
+        return {
+            "status": "delegated",
+            "function": function_name,
+            "parameters": parameters
+        }
     
     def _get_system_prompt(self) -> str:
         """Get system prompt for the AI agent."""
