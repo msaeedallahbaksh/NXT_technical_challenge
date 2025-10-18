@@ -255,31 +255,19 @@ async def stream_chat(
                             arguments = chunk_content["arguments"]
                             tool_call_id = chunk_content["id"]
                             
-                            # Determine if function requires user confirmation
-                            # Read-only operations auto-execute, write operations need confirmation
-                            # I added confirmation for certain tools to demonstrate confirming important actions with the user before executing. For read only tools like search_product, I decided to execute it directly in the backend while streaming 'notifications' instead of jumping and forth between front and backend. This speeds up execution for read only tools. 
-                            REQUIRES_CONFIRMATION = ["add_to_cart"]
-                            needs_confirmation = function_name in REQUIRES_CONFIRMATION
-                            
                             # Notify frontend that function is being called
                             function_call_event = SSEEvent(
                                 event="function_call",
                                 data={
                                     "function": function_name,
                                     "parameters": arguments,
-                                    "tool_call_id": tool_call_id,
-                                    "requires_confirmation": needs_confirmation
+                                    "tool_call_id": tool_call_id
                                 },
                                 id=str(uuid.uuid4())
                             )
                             yield f"event: {function_call_event.event}\ndata: {json.dumps(function_call_event.data)}\nid: {function_call_event.id}\n\n"
                             
-                            # Only auto-execute if confirmation not required
-                            if needs_confirmation:
-                                # Skip execution - frontend will handle via user interaction
-                                continue
-                            
-                            # Execute function directly (for read-only operations)
+                            # Auto-execute all functions
                             try:
                                 function_result = None
                                 
@@ -406,6 +394,118 @@ async def stream_chat(
                                                 "total": len(recommendations)
                                             }
                                         }
+                                
+                                elif function_name == "add_to_cart":
+                                    # Auto-execute add to cart
+                                    from models import CartItem
+                                    from sqlmodel import select
+                                    
+                                    product_id = arguments.get("product_id")
+                                    quantity = arguments.get("quantity", 1)
+                                    
+                                    if not product_id:
+                                        function_result = {
+                                            "success": False,
+                                            "error": {
+                                                "code": "MISSING_PRODUCT_ID",
+                                                "message": "Product ID is required"
+                                            }
+                                        }
+                                    else:
+                                        # Get product to check stock and price
+                                        product = await product_service.get_product_by_id(
+                                            product_id=product_id,
+                                            session=session
+                                        )
+                                        
+                                        if not product:
+                                            function_result = {
+                                                "success": False,
+                                                "error": {
+                                                    "code": "PRODUCT_NOT_FOUND",
+                                                    "message": f"Product with ID '{product_id}' was not found"
+                                                }
+                                            }
+                                        elif not product.in_stock:
+                                            function_result = {
+                                                "success": False,
+                                                "error": {
+                                                    "code": "OUT_OF_STOCK",
+                                                    "message": f"Product '{product.name}' is currently out of stock"
+                                                }
+                                            }
+                                        elif product.stock_quantity < quantity:
+                                            function_result = {
+                                                "success": False,
+                                                "error": {
+                                                    "code": "INSUFFICIENT_STOCK",
+                                                    "message": f"Only {product.stock_quantity} units available",
+                                                    "details": {
+                                                        "requested": quantity,
+                                                        "available": product.stock_quantity
+                                                    }
+                                                }
+                                            }
+                                        else:
+                                            # Check if item already in cart
+                                            statement = select(CartItem).where(
+                                                CartItem.session_id == session_id,
+                                                CartItem.product_id == product_id
+                                            )
+                                            result = await session.execute(statement)
+                                            existing_item = result.scalar_one_or_none()
+                                            
+                                            if existing_item:
+                                                # Update existing cart item
+                                                existing_item.quantity += quantity
+                                                existing_item.total_price = existing_item.quantity * product.price
+                                                session.add(existing_item)
+                                                await session.commit()
+                                                await session.refresh(existing_item)
+                                                cart_item = existing_item
+                                            else:
+                                                # Create new cart item
+                                                cart_item = CartItem(
+                                                    session_id=session_id,
+                                                    product_id=product_id,
+                                                    quantity=quantity,
+                                                    unit_price=product.price,
+                                                    total_price=quantity * product.price
+                                                )
+                                                session.add(cart_item)
+                                                await session.commit()
+                                                await session.refresh(cart_item)
+                                            
+                                            # Calculate cart summary
+                                            statement = select(CartItem).where(CartItem.session_id == session_id)
+                                            result = await session.execute(statement)
+                                            all_cart_items = result.scalars().all()
+                                            
+                                            total_items = sum(item.quantity for item in all_cart_items)
+                                            subtotal = sum(item.total_price for item in all_cart_items)
+                                            estimated_tax = round(subtotal * 0.1, 2)
+                                            estimated_total = round(subtotal + estimated_tax, 2)
+                                            
+                                            function_result = {
+                                                "success": True,
+                                                "data": {
+                                                    "cart_item": {
+                                                        "id": cart_item.id,
+                                                        "product_id": cart_item.product_id,
+                                                        "product_name": product.name,
+                                                        "quantity": cart_item.quantity,
+                                                        "unit_price": float(cart_item.unit_price),
+                                                        "total_price": float(cart_item.total_price)
+                                                    },
+                                                    "cart_summary": {
+                                                        "total_items": total_items,
+                                                        "total_products": len(all_cart_items),
+                                                        "subtotal": float(subtotal),
+                                                        "estimated_tax": float(estimated_tax),
+                                                        "estimated_total": float(estimated_total)
+                                                    }
+                                                }
+                                            }
                                 
                                 else:
                                     function_result = {
