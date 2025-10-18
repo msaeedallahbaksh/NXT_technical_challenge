@@ -833,6 +833,150 @@ async def add_to_cart_endpoint(
         raise HTTPException(status_code=500, detail=f"Error adding to cart: {str(e)}")
 
 
+@app.post("/api/functions/remove_from_cart")
+async def remove_from_cart_endpoint(
+    request: Dict[str, Any],
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Remove product from cart function endpoint.
+    
+    Can remove specific quantity or remove item entirely.
+    """
+    try:
+        from models import CartItem
+        from sqlmodel import select
+        
+        product_id = request.get("product_id", "")
+        quantity = request.get("quantity")  # Optional - if None, remove entire item
+        session_id = request.get("session_id", "")
+        
+        if not product_id:
+            raise HTTPException(status_code=400, detail="Product ID is required")
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required")
+        
+        # Find cart item
+        statement = select(CartItem).where(
+            CartItem.session_id == session_id,
+            CartItem.product_id == product_id
+        )
+        result = await session.execute(statement)
+        cart_item = result.scalar_one_or_none()
+        
+        if not cart_item:
+            return {
+                "success": False,
+                "error": {
+                    "code": "ITEM_NOT_IN_CART",
+                    "message": f"Product '{product_id}' is not in your cart"
+                }
+            }
+        
+        # Determine action
+        if quantity is None or quantity >= cart_item.quantity:
+            # Remove item entirely
+            await session.delete(cart_item)
+            await session.commit()
+            removed_quantity = cart_item.quantity
+            action = "removed"
+        else:
+            # Reduce quantity
+            cart_item.quantity -= quantity
+            cart_item.total_price = cart_item.quantity * cart_item.unit_price
+            session.add(cart_item)
+            await session.commit()
+            await session.refresh(cart_item)
+            removed_quantity = quantity
+            action = "reduced"
+        
+        # Get updated cart summary
+        statement = select(CartItem).where(CartItem.session_id == session_id)
+        result = await session.execute(statement)
+        all_cart_items = result.scalars().all()
+        
+        total_items = sum(item.quantity for item in all_cart_items)
+        subtotal = sum(item.total_price for item in all_cart_items)
+        estimated_tax = round(subtotal * 0.1, 2)
+        estimated_total = round(subtotal + estimated_tax, 2)
+        
+        return {
+            "success": True,
+            "data": {
+                "action": action,
+                "removed_quantity": removed_quantity,
+                "cart_summary": {
+                    "total_items": total_items,
+                    "total_products": len(all_cart_items),
+                    "subtotal": subtotal,
+                    "estimated_tax": estimated_tax,
+                    "estimated_total": estimated_total
+                }
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error removing from cart: {str(e)}")
+
+
+@app.get("/api/cart/{session_id}")
+async def get_cart(
+    session_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get current cart contents for a session.
+    """
+    try:
+        from models import CartItem
+        from sqlmodel import select
+        
+        # Get all cart items
+        statement = select(CartItem).where(CartItem.session_id == session_id)
+        result = await session.execute(statement)
+        cart_items = result.scalars().all()
+        
+        # Get product details for each item
+        items_with_details = []
+        for item in cart_items:
+            product = await product_service.get_product_by_id(item.product_id, session)
+            if product:
+                items_with_details.append({
+                    "id": item.id,
+                    "product_id": item.product_id,
+                    "product_name": product.name,
+                    "product_image": product.image_url,
+                    "quantity": item.quantity,
+                    "unit_price": float(item.unit_price),
+                    "total_price": float(item.total_price),
+                    "added_at": item.added_at.isoformat()
+                })
+        
+        # Calculate totals
+        total_items = sum(item.quantity for item in cart_items)
+        subtotal = sum(item.total_price for item in cart_items)
+        estimated_tax = round(subtotal * 0.1, 2)
+        estimated_total = round(subtotal + estimated_tax, 2)
+        
+        return {
+            "success": True,
+            "items": items_with_details,
+            "summary": {
+                "total_items": total_items,
+                "total_products": len(items_with_details),
+                "subtotal": float(subtotal),
+                "estimated_tax": float(estimated_tax),
+                "estimated_total": float(estimated_total)
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting cart: {str(e)}")
+
+
 @app.post("/api/functions/get_recommendations")
 async def get_recommendations_endpoint(
     request: Dict[str, Any],
