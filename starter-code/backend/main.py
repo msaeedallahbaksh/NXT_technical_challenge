@@ -6,6 +6,7 @@ This is the main entry point for the backend API that provides:
 - AI agent integration with function calling
 - Product search and recommendation system
 - Context validation to prevent AI hallucination
+- Rate limiting to prevent abuse and protect resources
 """
 
 import os
@@ -18,16 +19,22 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+# Rate limiting imports
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from database import init_db, get_session
 from models import ChatMessage, SSEEvent, SessionContext
 from ai_agent import AIAgent, MockAIAgent
 from product_service import ProductService
 from context_manager import ContextManager
+from rate_limit_config import RateLimitConfig, get_rate_limit_error_message
 
 
 @asynccontextmanager
@@ -46,6 +53,71 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# ==================================================================
+# RATE LIMITING SETUP
+# ==================================================================
+# Initialize the rate limiter
+# 
+# HOW IT WORKS:
+# 1. get_remote_address: Uses the client's IP address as the identifier
+#    - Each IP address gets its own rate limit counter
+#    - If you're behind a proxy, set 'FORWARDED_ALLOW_IPS' env var
+#
+# 2. storage_uri: Where to store rate limit data
+#    - memory://  = Fast, but only works on single server
+#    - redis://   = Slower, but works across multiple servers
+#
+# 3. When limit is exceeded:
+#    - Returns 429 status code (Too Many Requests)
+#    - Includes 'Retry-After' header (tells client when to retry)
+#    - Custom error message explaining the limit
+# ==================================================================
+
+limiter = Limiter(
+    key_func=get_remote_address,  # Rate limit per IP address
+    storage_uri=RateLimitConfig.get_storage_uri(),  # memory:// or redis://
+    enabled=RateLimitConfig.is_enabled(),  # Can disable via env var
+    headers_enabled=True,  # Add rate limit headers to response (X-RateLimit-*)
+)
+
+# Add rate limiter to app state (makes it accessible in endpoints)
+app.state.limiter = limiter
+
+# Add custom error handler for rate limit exceeded errors
+@app.exception_handler(RateLimitExceeded)
+async def custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    """
+    Custom error handler when rate limit is exceeded.
+    
+    This provides a user-friendly error message instead of the default
+    "Rate limit exceeded" message.
+    """
+    # Extract endpoint information from the request
+    endpoint = request.url.path.split('/')[-1] if request.url.path else 'unknown'
+    
+    # Get the rate limit that was exceeded
+    rate_limit = getattr(exc, 'detail', 'Rate limit exceeded')
+    
+    # Generate helpful error message
+    error_message = get_rate_limit_error_message(endpoint, str(rate_limit))
+    
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "Rate limit exceeded",
+            "message": error_message,
+            "retry_after": exc.detail if hasattr(exc, 'detail') else "60 seconds",
+            "endpoint": endpoint,
+            "limit": rate_limit,
+        },
+        headers={
+            "Retry-After": "60",  # Tell client to wait 60 seconds
+            "X-RateLimit-Limit": str(rate_limit),
+        }
+    )
+
+app.add_exception_handler(RateLimitExceeded, custom_rate_limit_handler)
 
 # CORS middleware
 origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
@@ -89,18 +161,35 @@ message_queues: Dict[str, asyncio.Queue] = {}
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint."""
+@limiter.limit(RateLimitConfig.HEALTH_CHECK_LIMIT)  # 100 requests per minute
+async def health_check(request: Request, response: Response):
+    """
+    Health check endpoint.
+    
+    Rate limit: 100 requests per minute per IP
+    Why: Generous limit since this is a simple status check
+    """
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "rate_limiting": {
+            "enabled": RateLimitConfig.is_enabled(),
+            "limit": RateLimitConfig.HEALTH_CHECK_LIMIT
+        }
     }
 
 
 @app.post("/api/sessions")
-async def create_session(session: AsyncSession = Depends(get_session)):
-    """Create a new chat session."""
+@limiter.limit(RateLimitConfig.CREATE_SESSION_LIMIT)  # 10 sessions per minute
+async def create_session(request: Request, response: Response, session: AsyncSession = Depends(get_session)):
+    """
+    Create a new chat session.
+    
+    Rate limit: 10 sessions per minute per IP
+    Why: Prevents session flooding attacks. Normal users rarely need
+    more than a few sessions per minute.
+    """
     session_id = str(uuid.uuid4())
     
     # Initialize session context
@@ -119,12 +208,31 @@ async def create_session(session: AsyncSession = Depends(get_session)):
 
 
 @app.post("/api/chat/{session_id}/message")
+@limiter.limit(RateLimitConfig.SEND_MESSAGE_LIMIT)  # 20 messages per minute
 async def send_message(
+    request: Request,
+    response: Response,
     session_id: str,
     message: ChatMessage,
     session: AsyncSession = Depends(get_session)
 ):
-    """Send a message to the AI agent."""
+    """
+    Send a message to the AI agent.
+    
+    ⚠️ CRITICAL RATE LIMIT ⚠️
+    Rate limit: 20 messages per minute per IP
+    
+    Why this is strict:
+    1. Each message costs money (OpenAI/Anthropic API charges)
+    2. AI calls can take 2-10 seconds each
+    3. Without limits, someone could send 1000 messages and cause:
+       - $100+ in AI API costs
+       - Server overload
+       - Denial of service for other users
+    
+    For normal conversation, 20 messages per minute is generous
+    (that's one message every 3 seconds).
+    """
     
     # Validate session exists
     if not await context_manager.session_exists(session_id, session):
@@ -151,13 +259,25 @@ async def send_message(
 
 
 @app.get("/api/stream/{session_id}")
+@limiter.limit(RateLimitConfig.SSE_STREAM_LIMIT)  # 10 connections per minute
 async def stream_chat(
     session_id: str,
     request: Request,
+    response: Response,
     session: AsyncSession = Depends(get_session)
 ):
     """
     Server-Sent Events endpoint for real-time AI communication.
+    
+    Rate limit: 10 SSE connections per minute per IP
+    
+    Why: Each SSE connection:
+    - Holds server resources (memory, CPU, network)
+    - Keeps a database session open
+    - Can stream for hours
+    
+    Too many connections from one IP could exhaust server capacity.
+    Normal usage: Users typically only need 1-2 concurrent connections.
     
     This endpoint provides real-time streaming of:
     - AI text responses (chunked)
@@ -700,11 +820,19 @@ async def stream_chat(
 
 
 @app.get("/api/sessions/{session_id}/context")
+@limiter.limit(RateLimitConfig.GET_SESSION_CONTEXT_LIMIT)  # 60 per minute
 async def get_session_context(
+    request: Request,
+    response: Response,
     session_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    """Get the current session context."""
+    """
+    Get the current session context.
+    
+    Rate limit: 60 requests per minute per IP
+    Why: This is just reading data, so we can be generous.
+    """
     context = await context_manager.get_context(session_id, session)
     if not context:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -718,21 +846,30 @@ async def get_session_context(
 
 # Function call endpoints
 @app.post("/api/functions/search_products")
+@limiter.limit(RateLimitConfig.SEARCH_PRODUCTS_LIMIT)  # 30 searches per minute
 async def search_products_endpoint(
-    request: Dict[str, Any],
+    request: Request,
+    response: Response,
+    body: Dict[str, Any],
     session: AsyncSession = Depends(get_session)
 ):
     """
     Search products function endpoint.
     
+    Rate limit: 30 searches per minute per IP
+    
+    Why: Database queries can be intensive, especially with text search.
+    Too many searches could slow down the database for everyone.
+    30 per minute allows for active browsing without enabling abuse.
+    
     This endpoint searches for products based on query and category,
     updates the search context, and returns results.
     """
     try:
-        query = request.get("query", "")
-        category = request.get("category")
-        limit = request.get("limit", 10)
-        session_id = request.get("session_id", "")
+        query = body.get("query", "")
+        category = body.get("category")
+        limit = body.get("limit", 10)
+        session_id = body.get("session_id", "")
         
         if not query:
             raise HTTPException(status_code=400, detail="Query parameter is required")
@@ -795,20 +932,27 @@ async def search_products_endpoint(
 
 
 @app.post("/api/functions/show_product_details")
+@limiter.limit(RateLimitConfig.PRODUCT_DETAILS_LIMIT)  # 50 per minute
 async def show_product_details_endpoint(
-    request: Dict[str, Any],
+    request: Request,
+    response: Response,
+    body: Dict[str, Any],
     session: AsyncSession = Depends(get_session)
 ):
     """
     Show product details function endpoint.
     
+    Rate limit: 50 requests per minute per IP
+    Why: This is a simple database lookup by ID (fast operation).
+    More generous than search since it's less resource-intensive.
+    
     This endpoint gets detailed product information with optional recommendations.
     Validates product ID against recent search context to prevent AI hallucination.
     """
     try:
-        product_id = request.get("product_id", "")
-        include_recommendations = request.get("include_recommendations", True)
-        session_id = request.get("session_id", "")
+        product_id = body.get("product_id", "")
+        include_recommendations = body.get("include_recommendations", True)
+        session_id = body.get("session_id", "")
         
         if not product_id:
             raise HTTPException(status_code=400, detail="Product ID is required")
@@ -902,12 +1046,21 @@ async def show_product_details_endpoint(
 
 
 @app.post("/api/functions/add_to_cart")
+@limiter.limit(RateLimitConfig.ADD_TO_CART_LIMIT)  # 30 per minute
 async def add_to_cart_endpoint(
-    request: Dict[str, Any],
+    request: Request,
+    response: Response,
+    body: Dict[str, Any],
     session: AsyncSession = Depends(get_session)
 ):
     """
     Add product to cart function endpoint.
+    
+    Rate limit: 30 requests per minute per IP
+    Why: This writes to the database. We want to prevent:
+    - Accidental duplicate additions (clicking add button rapidly)
+    - Malicious cart flooding
+    - Database write contention
     
     This endpoint adds a product to the user's cart with inventory validation.
     Checks stock availability and updates cart totals.
@@ -916,9 +1069,9 @@ async def add_to_cart_endpoint(
         from models import CartItem
         from sqlmodel import select
         
-        product_id = request.get("product_id", "")
-        quantity = request.get("quantity", 1)
-        session_id = request.get("session_id", "")
+        product_id = body.get("product_id", "")
+        quantity = body.get("quantity", 1)
+        session_id = body.get("session_id", "")
         
         if not product_id:
             raise HTTPException(status_code=400, detail="Product ID is required")
@@ -1040,12 +1193,18 @@ async def add_to_cart_endpoint(
 
 
 @app.post("/api/functions/remove_from_cart")
+@limiter.limit(RateLimitConfig.REMOVE_FROM_CART_LIMIT)  # 30 per minute
 async def remove_from_cart_endpoint(
-    request: Dict[str, Any],
+    request: Request,
+    response: Response,
+    body: Dict[str, Any],
     session: AsyncSession = Depends(get_session)
 ):
     """
     Remove product from cart function endpoint.
+    
+    Rate limit: 30 requests per minute per IP
+    Why: Same as add_to_cart - prevents rapid-fire database writes.
     
     Can remove specific quantity or remove item entirely.
     """
@@ -1053,9 +1212,9 @@ async def remove_from_cart_endpoint(
         from models import CartItem
         from sqlmodel import select
         
-        product_id = request.get("product_id", "")
-        quantity = request.get("quantity")  # Optional - if None, remove entire item
-        session_id = request.get("session_id", "")
+        product_id = body.get("product_id", "")
+        quantity = body.get("quantity")  # Optional - if None, remove entire item
+        session_id = body.get("session_id", "")
         
         if not product_id:
             raise HTTPException(status_code=400, detail="Product ID is required")
@@ -1129,12 +1288,19 @@ async def remove_from_cart_endpoint(
 
 
 @app.get("/api/cart/{session_id}")
+@limiter.limit(RateLimitConfig.GET_CART_LIMIT)  # 60 per minute
 async def get_cart(
+    request: Request,
+    response: Response,
     session_id: str,
     session: AsyncSession = Depends(get_session)
 ):
     """
     Get current cart contents for a session.
+    
+    Rate limit: 60 requests per minute per IP
+    Why: This is a read operation, so we can be generous.
+    Users might check their cart frequently while shopping.
     """
     try:
         from models import CartItem
@@ -1184,21 +1350,32 @@ async def get_cart(
 
 
 @app.post("/api/functions/get_recommendations")
+@limiter.limit(RateLimitConfig.GET_RECOMMENDATIONS_LIMIT)  # 30 per minute
 async def get_recommendations_endpoint(
-    request: Dict[str, Any],
+    request: Request,
+    response: Response,
+    body: Dict[str, Any],
     session: AsyncSession = Depends(get_session)
 ):
     """
     Get product recommendations function endpoint.
     
+    Rate limit: 30 requests per minute per IP
+    Why: Recommendation algorithms can be CPU intensive.
+    They might involve:
+    - Calculating similarity scores
+    - Sorting large result sets
+    - Multiple database queries
+    30 per minute is generous for browsing while preventing abuse.
+    
     This endpoint returns product recommendations based on a product ID or category.
     Uses collaborative filtering approach (same category products).
     """
     try:
-        based_on = request.get("based_on", "")  # Product ID or category
-        recommendation_type = request.get("recommendation_type", "similar")
-        max_results = request.get("max_results", 5)
-        session_id = request.get("session_id", "")
+        based_on = body.get("based_on", "")  # Product ID or category
+        recommendation_type = body.get("recommendation_type", "similar")
+        max_results = body.get("max_results", 5)
+        session_id = body.get("session_id", "")
         
         if not based_on:
             raise HTTPException(status_code=400, detail="'based_on' parameter is required (product ID or category)")
