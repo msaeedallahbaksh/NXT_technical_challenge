@@ -34,12 +34,9 @@ from context_manager import ContextManager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
-    print("🚀 Starting AI Product Discovery Assistant...")
     await init_db()
-    print("✅ Database initialized")
     yield
     # Shutdown
-    print("🛑 Shutting down...")
 
 
 # Create FastAPI app
@@ -69,15 +66,18 @@ def get_ai_agent() -> AIAgent:
         try:
             from ai_agent import OpenAIAgent
             return OpenAIAgent()
-        except ValueError as e:
-            print(f"⚠️  Warning: {e}")
-            print("⚠️  Falling back to MockAIAgent. Set OPENAI_API_KEY in .env to use OpenAI.")
+        except ValueError:
+            # Fall back to MockAIAgent if API key not configured
             return MockAIAgent()
     elif provider == "anthropic":
-        print("⚠️  Anthropic not implemented yet. Using MockAIAgent.")
-        return MockAIAgent()
+        try:
+            from ai_agent import AnthropicAgent
+            return AnthropicAgent()
+        except ValueError:
+            # Fall back to MockAIAgent if API key not configured
+            return MockAIAgent()
     else:
-        print(f"ℹ️  Using MockAIAgent (AI_PROVIDER={provider})")
+        # Use MockAIAgent for testing/development
         return MockAIAgent()
 
 ai_agent = get_ai_agent()

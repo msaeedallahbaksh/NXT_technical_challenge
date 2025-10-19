@@ -31,11 +31,11 @@ class ProductService:
         # Build query
         statement = select(Product).where(Product.in_stock)
         
-        # Add text search
+        # Add text search (case-insensitive using ilike)
         if query:
             statement = statement.where(
-                Product.name.contains(query) | 
-                Product.description.contains(query)
+                (Product.name.ilike(f"%{query}%")) | 
+                (Product.description.ilike(f"%{query}%"))
             )
         
         # Add category filter
