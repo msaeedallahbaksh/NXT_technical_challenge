@@ -91,6 +91,18 @@ class CartItem(SQLModel, table=True):
     added_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class ConversationMessage(SQLModel, table=True):
+    """Conversation history for AI context."""
+    
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: str = Field(index=True)
+    role: str = Field(index=True)  # "user", "assistant", or "system"
+    content: str
+    tool_calls: Optional[str] = Field(default=None)  # JSON string of tool calls if any
+    tool_results: Optional[str] = Field(default=None)  # JSON string of tool results if any
+    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
 # Pydantic Models for API
 class ChatMessage(BaseModel):
     """Chat message from user."""

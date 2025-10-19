@@ -223,16 +223,80 @@ async def stream_chat(
                 try:
                     # Wait for message with timeout to check for disconnection
                     message_data = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    user_message = message_data["message"]
+                    
+                    # Store user message in conversation history
+                    from models import ConversationMessage
+                    user_msg_record = ConversationMessage(
+                        session_id=session_id,
+                        role="user",
+                        content=user_message
+                    )
+                    session.add(user_msg_record)
+                    await session.commit()
                     
                     # Get session context
                     ctx = await context_manager.get_context(session_id, session)
                     context_data = ctx.context_data if ctx else {}
                     
+                    # Retrieve conversation history (last 20 messages)
+                    from sqlmodel import select
+                    history_statement = select(ConversationMessage).where(
+                        ConversationMessage.session_id == session_id
+                    ).order_by(ConversationMessage.timestamp).limit(20)
+                    history_result = await session.execute(history_statement)
+                    history_messages = history_result.scalars().all()
+                    
+                    # Convert to OpenAI format (exclude the current message we just added)
+                    conversation_history = []
+                    for msg in history_messages[:-1]:  # Exclude the last message (current user message)
+                        if msg.role == "tool":
+                            # Tool result message - OpenAI expects specific format
+                            tool_data = json.loads(msg.tool_calls) if msg.tool_calls else []
+                            if tool_data:
+                                conversation_history.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_data[0]["id"],
+                                    "content": msg.content
+                                })
+                        elif msg.role == "assistant" and msg.tool_calls:
+                            # Assistant message with tool calls
+                            tool_calls_data = json.loads(msg.tool_calls)
+                            # Format tool calls for OpenAI
+                            formatted_tool_calls = []
+                            for tc in tool_calls_data:
+                                formatted_tool_calls.append({
+                                    "id": tc["id"],
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc["function"],
+                                        "arguments": json.dumps(tc["arguments"])
+                                    }
+                                })
+                            
+                            conversation_history.append({
+                                "role": "assistant",
+                                "content": msg.content or None,
+                                "tool_calls": formatted_tool_calls
+                            })
+                        else:
+                            # Regular user or assistant message
+                            conversation_history.append({
+                                "role": msg.role,
+                                "content": msg.content
+                            })
+                    
+                    # Track assistant response content
+                    assistant_response_text = ""
+                    assistant_tool_calls = []
+                    tool_results = []  # Track tool execution results
+                    
                     # Stream AI response with real-time function calling
                     async for response_chunk in ai_agent.stream_response(
-                        message=message_data["message"],
+                        message=user_message,
                         context=context_data,
-                        session_id=session_id
+                        session_id=session_id,
+                        conversation_history=conversation_history
                     ):
                         if await request.is_disconnected():
                             break
@@ -242,6 +306,7 @@ async def stream_chat(
                         
                         # Handle text content
                         if chunk_type == "text":
+                            assistant_response_text += chunk_content
                             event = SSEEvent(
                                 event="text_chunk",
                                 data={"content": chunk_content, "partial": True},
@@ -254,6 +319,13 @@ async def stream_chat(
                             function_name = chunk_content["function"]
                             arguments = chunk_content["arguments"]
                             tool_call_id = chunk_content["id"]
+                            
+                            # Track tool call
+                            assistant_tool_calls.append({
+                                "id": tool_call_id,
+                                "function": function_name,
+                                "arguments": arguments
+                            })
                             
                             # Notify frontend that function is being called
                             function_call_event = SSEEvent(
@@ -513,6 +585,13 @@ async def stream_chat(
                                         "error": f"Unknown function: {function_name}"
                                     }
                                 
+                                # Track tool result for conversation history
+                                tool_results.append({
+                                    "tool_call_id": tool_call_id,
+                                    "function": function_name,
+                                    "result": function_result
+                                })
+                                
                                 # Send function result back to frontend
                                 result_event = SSEEvent(
                                     event="function_result",
@@ -547,6 +626,33 @@ async def stream_chat(
                                 id=str(uuid.uuid4())
                             )
                             yield f"event: {error_event.event}\ndata: {json.dumps(error_event.data)}\nid: {error_event.id}\n\n"
+                    
+                    # Store assistant response in conversation history
+                    if assistant_response_text or assistant_tool_calls:
+                        assistant_msg_record = ConversationMessage(
+                            session_id=session_id,
+                            role="assistant",
+                            content=assistant_response_text or "",
+                            tool_calls=json.dumps(assistant_tool_calls) if assistant_tool_calls else None
+                        )
+                        session.add(assistant_msg_record)
+                        await session.commit()
+                    
+                    # Store tool results as separate messages (role="tool")
+                    for tool_result in tool_results:
+                        tool_msg_record = ConversationMessage(
+                            session_id=session_id,
+                            role="tool",
+                            content=json.dumps(tool_result["result"]),
+                            tool_calls=json.dumps([{
+                                "id": tool_result["tool_call_id"],
+                                "function": tool_result["function"]
+                            }])
+                        )
+                        session.add(tool_msg_record)
+                    
+                    if tool_results:
+                        await session.commit()
                     
                     # Send completion event
                     completion_event = SSEEvent(

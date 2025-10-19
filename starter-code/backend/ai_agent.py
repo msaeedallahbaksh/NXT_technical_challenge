@@ -9,7 +9,7 @@ import os
 import json
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Dict, Any, AsyncGenerator, Optional
+from typing import Dict, Any, AsyncGenerator, Optional, List
 
 import httpx
 
@@ -50,13 +50,20 @@ class OpenAIAgent(AIAgent):
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY environment variable required")
     async def stream_response(
-        self,
-        message: str,
+        self, 
+        message: str, 
         context: Dict[str, Any],
-        session_id: str
+        session_id: str,
+        conversation_history: List[Dict[str, Any]] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Stream response from OpenAI with function calling support.
+        
+        Args:
+            message: Current user message
+            context: Session context (cart, search results)
+            session_id: Session identifier
+            conversation_history: Previous messages in conversation
         
         Yields dictionaries with keys:
         - type: "text" | "tool_call" | "error"
@@ -69,22 +76,19 @@ class OpenAIAgent(AIAgent):
                 "Content-Type": "application/json"
             }
             
-            # Build messages with context if available
+            # Build messages array starting with system prompt
             messages = [
                 {
                     "role": "system",
-                    "content": self._get_system_prompt()
+                    "content": self._get_system_prompt(context)
                 }
             ]
             
-            # Add context if available
-            if context:
-                context_str = f"User context: {json.dumps(context)}"
-                messages.append({
-                    "role": "system",
-                    "content": context_str
-                })
+            # Add conversation history if available
+            if conversation_history:
+                messages.extend(conversation_history)
             
+            # Add current user message
             messages.append({
                 "role": "user",
                 "content": message
@@ -208,17 +212,57 @@ class OpenAIAgent(AIAgent):
             "parameters": parameters
         }
     
-    def _get_system_prompt(self) -> str:
-        """Get system prompt for the AI agent."""
-        return """
-        You are a helpful AI shopping assistant. You can help users:
-        - Search for products
-        - Get detailed product information
-        - Add items to their cart
-        - Get product recommendations
+    def _get_system_prompt(self, context: Dict[str, Any] = None) -> str:
+        """Get system prompt for the AI agent with current context."""
+        base_prompt = """You are a friendly AI shopping assistant helping customers find and purchase products.
+
+CAPABILITIES:
+- Search for products by name, category, or features
+- Show detailed product information
+- Add items to shopping cart
+- Provide personalized recommendations
+
+IMPORTANT CONVERSATION RULES:
+1. ALWAYS provide a friendly text response alongside tool calls - never just execute functions silently
+2. Narrate what you're doing: "Let me search for that...", "I found some great options!", "I'll add that to your cart!"
+3. Be conversational and enthusiastic about helping
+4. After tool results, comment on what was found or done
+
+EXAMPLES:
+User: "search for headphones"
+You: "Let me find some great headphones for you! 🎧" [then call search_products]
+
+User: "add the first one to my cart"  
+You: "Perfect choice! I'll add that to your cart right away! 🛒" [then call add_to_cart]
+
+User: "show me product details"
+You: "Let me get all the details for you! ✨" [then call show_product_details]
+
+Always be helpful, enthusiastic, and conversational!"""
         
-        Always use function calls when appropriate and be helpful and friendly.
-        """
+        # Add context information if available
+        if context:
+            context_parts = []
+            
+            # Add cart information
+            if context.get("cart_items"):
+                cart_count = len(context["cart_items"])
+                context_parts.append(f"- User currently has {cart_count} item(s) in their cart")
+            
+            # Add recent search context
+            if context.get("recent_searches"):
+                searches = context["recent_searches"][:3]  # Last 3 searches
+                context_parts.append(f"- Recent searches: {', '.join(searches)}")
+            
+            # Add recently viewed products
+            if context.get("viewed_products"):
+                products = context["viewed_products"][:5]  # Last 5 viewed
+                context_parts.append(f"- Recently viewed products: {', '.join(products)}")
+            
+            if context_parts:
+                base_prompt += "\n\nCURRENT CONTEXT:\n" + "\n".join(context_parts)
+        
+        return base_prompt
     
     def _get_function_definitions(self) -> list:
         """Get OpenAI tool definitions for function calling."""
