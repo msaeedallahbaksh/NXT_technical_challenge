@@ -57,7 +57,7 @@ const MessageList: React.FC<MessageListProps> = ({ messages, onInteraction }) =>
                   {message.content}
                 </p>
                 {/* Inline results under the same message (no function name, no icons) */}
-                {message.function_call?.result && (
+                {message.function_call?.result?.success && message.function_call?.result?.data && (
                   <div className="mt-3">
                     <FunctionCallRenderer 
                       functionCall={message.function_call}

@@ -54,17 +54,35 @@ const FunctionCallRenderer: React.FC<FunctionCallRendererProps> = ({
 
   // Handle different function call types
   const handleInteraction = (action: string, data: any) => {
-    console.log('Function interaction:', { function: name, action, data });
     onInteraction?.(action, { function: name, ...data });
   };
 
   // Render the appropriate component with function call data
   try {
+    // Only render when we have a successful result or required props
+    const safeProps = {
+      ...(parameters || {}),
+      ...((result && result.success && result.data) ? result.data : {}),
+    };
+
+    // Guard for add_to_cart shape to avoid crashes
+    if (name === 'add_to_cart') {
+      const cartItem = safeProps.cart_item;
+      const cartSummary = safeProps.cart_summary;
+      if (!cartItem || !cartSummary) {
+        return (
+          <div className="border rounded-lg p-4 bg-yellow-50">
+            <h3 className="font-medium text-yellow-900 mb-2">Add to Cart</h3>
+            <p className="text-sm text-yellow-700">Waiting for cart details...</p>
+          </div>
+        );
+      }
+    }
+
     return (
       <div className="mt-3">
         <Component
-          {...parameters}
-          {...(result?.data || {})}
+          {...safeProps}
           onInteraction={handleInteraction}
           onProductSelect={(id: string) => handleInteraction('select_product', { product_id: id })}
           onAddToCart={(id: string, quantity: number) => handleInteraction('add_to_cart', { product_id: id, quantity })}

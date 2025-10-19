@@ -30,8 +30,6 @@ const ChatInterface: React.FC = () => {
 
   // Handle function call execution
   const handleFunctionCall = async (functionCall: any) => {
-    console.log('Executing function call:', functionCall);
-    
     const { function: functionName, parameters, messageId } = functionCall;
     
     if (!functionName || !sessionId) {
@@ -66,7 +64,6 @@ const ChatInterface: React.FC = () => {
       }
 
       const result = await response.json();
-      console.log('Function result:', result);
       
       // Update the message with the result
       updateMessage(currentMessageId!, {
@@ -103,8 +100,8 @@ const ChatInterface: React.FC = () => {
     addFunctionCallMessage
   } = useSSEConnection({
     sessionId: sessionId || '',
-    onMessage: (message) => {
-      console.log('New message:', message);
+    onMessage: () => {
+      // Message received
     },
     onFunctionCall: handleFunctionCall, // Now actually executes the function!
     onError: (error) => {

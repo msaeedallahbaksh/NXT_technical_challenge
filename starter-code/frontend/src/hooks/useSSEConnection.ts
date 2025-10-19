@@ -96,7 +96,6 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
-        console.log('SSE connection opened');
         setConnectionStatus('connected');
         setError(null);
         reconnectAttemptsRef.current = 0;
@@ -105,7 +104,6 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
       eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log('SSE message received:', data);
           
           // Handle different event types
           handleSSEEvent(data, event.type || 'message');
@@ -171,10 +169,11 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
   const handleSSEEvent = (data: any, eventType: string) => {
     switch (eventType) {
       case 'connection':
-        console.log('Connection established:', data);
+        // Connection established
         break;
       default:
-        console.log('Unknown event type:', eventType, data);
+        // Unknown event type - silently ignore
+        break;
     }
   };
 
@@ -315,7 +314,6 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
    * Handle completion events
    */
   const handleCompletion = (data: any) => {
-    console.log('Turn completed:', data);
     setIsTyping(false);
   };
 
@@ -343,7 +341,6 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
     
     reconnectTimeoutRef.current = setTimeout(() => {
       reconnectAttemptsRef.current++;
-      console.log(`Reconnection attempt ${reconnectAttemptsRef.current}`);
       connect();
     }, delay);
   };
@@ -382,8 +379,7 @@ export const useSSEConnection = (options: SSEConnectionOptions): SSEConnectionHo
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const result = await response.json();
-      console.log('Message sent successfully:', result);
+      await response.json();
 
     } catch (err: any) {
       if (err.name !== 'AbortError') {
