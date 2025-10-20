@@ -1,0 +1,340 @@
+{
+  "info": {
+    "name": "AI Product Discovery Assistant - Part 2",
+    "description": "API endpoints for testing Part 1 & 2 implementation (all 4 functions)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "session_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        },
+        "description": "Check if the API is running and healthy"
+      }
+    },
+    {
+      "name": "2. Create Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    var jsonData = pm.response.json();",
+              "    pm.collectionVariables.set(\"session_id\", jsonData.session_id);",
+              "    console.log(\"Session ID saved: \" + jsonData.session_id);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/sessions",
+          "host": ["{{base_url}}"],
+          "path": ["api", "sessions"]
+        },
+        "description": "Create a new session and automatically save the session_id"
+      }
+    },
+    {
+      "name": "3. Search Products - Headphones",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"headphones\",\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/search_products",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "search_products"]
+        },
+        "description": "Search for headphones in the product catalog"
+      }
+    },
+    {
+      "name": "3. Search Products - Phone",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"phone\",\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/search_products",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "search_products"]
+        },
+        "description": "Search for phone-related products"
+      }
+    },
+    {
+      "name": "3. Search Products - Electronics",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"wireless\",\n  \"category\": \"electronics\",\n  \"limit\": 10,\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/search_products",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "search_products"]
+        },
+        "description": "Search for wireless electronics"
+      }
+    },
+    {
+      "name": "3. Search Products - Clothing",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"shirt\",\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/search_products",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "search_products"]
+        },
+        "description": "Search for clothing items"
+      }
+    },
+    {
+      "name": "3. Search Products - Home",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"bottle\",\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/search_products",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "search_products"]
+        },
+        "description": "Search for home products"
+      }
+    },
+    {
+      "name": "4. Show Product Details",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"product_id\": \"prod_001\",\n  \"include_recommendations\": true,\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/show_product_details",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "show_product_details"]
+        },
+        "description": "Get detailed product information with recommendations (run search first to track context)"
+      }
+    },
+    {
+      "name": "5. Add to Cart",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"product_id\": \"prod_001\",\n  \"quantity\": 2,\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/add_to_cart",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "add_to_cart"]
+        },
+        "description": "Add a product to the shopping cart with quantity validation"
+      }
+    },
+    {
+      "name": "6. Get Recommendations - By Product",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"based_on\": \"prod_001\",\n  \"recommendation_type\": \"similar\",\n  \"max_results\": 5,\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/get_recommendations",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "get_recommendations"]
+        },
+        "description": "Get product recommendations based on a specific product"
+      }
+    },
+    {
+      "name": "6. Get Recommendations - By Category",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"based_on\": \"electronics\",\n  \"max_results\": 5,\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/get_recommendations",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "get_recommendations"]
+        },
+        "description": "Get product recommendations based on a category"
+      }
+    },
+    {
+      "name": "7. Get Cart",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/cart/{{session_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["api", "cart", "{{session_id}}"]
+        },
+        "description": "Get current cart contents for the session"
+      }
+    },
+    {
+      "name": "8. Remove from Cart",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"product_id\": \"prod_001\",\n  \"session_id\": \"{{session_id}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/functions/remove_from_cart",
+          "host": ["{{base_url}}"],
+          "path": ["api", "functions", "remove_from_cart"]
+        },
+        "description": "Remove a product from cart (removes entire item, or pass quantity to reduce)"
+      }
+    },
+    {
+      "name": "9. Get Session Context",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/sessions/{{session_id}}/context",
+          "host": ["{{base_url}}"],
+          "path": ["api", "sessions", "{{session_id}}", "context"]
+        },
+        "description": "Retrieve the current session context including search history"
+      }
+    },
+    {
+      "name": "10. Send Chat Message",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"message\": \"search for headphones\",\n  \"context\": {}\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/chat/{{session_id}}/message",
+          "host": ["{{base_url}}"],
+          "path": ["api", "chat", "{{session_id}}", "message"]
+        },
+        "description": "Send a message to the AI assistant. The response will stream via SSE."
+      }
+    }
+  ]
+}
+
