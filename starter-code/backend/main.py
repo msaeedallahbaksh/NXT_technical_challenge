@@ -31,7 +31,7 @@ from slowapi.errors import RateLimitExceeded
 
 from database import init_db, get_session
 from models import ChatMessage, SSEEvent, SessionContext
-from ai_agent import AIAgent, MockAIAgent
+from ai_agent import AIAgent, OpenAIAgent, AnthropicAgent
 from product_service import ProductService
 from context_manager import ContextManager
 from rate_limit_config import RateLimitConfig, get_rate_limit_error_message
@@ -132,26 +132,37 @@ app.add_middleware(
 
 # Global services (in production, use dependency injection)
 def get_ai_agent() -> AIAgent:
-    """Factory function to create the appropriate AI agent."""
-    provider = os.getenv("AI_PROVIDER", "simulate").lower()
+    """
+    Factory function to create the appropriate AI agent.
+    
+    Requires AI_PROVIDER and corresponding API key to be set.
+    Fails fast with clear error message if configuration is missing.
+    """
+    provider = os.getenv("AI_PROVIDER", "anthropic").lower()
     
     if provider == "openai":
-        try:
-            from ai_agent import OpenAIAgent
-            return OpenAIAgent()
-        except ValueError:
-            # Fall back to MockAIAgent if API key not configured
-            return MockAIAgent()
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "OPENAI_API_KEY not found in environment variables. "
+                "Please set it in your .env file."
+            )
+        return OpenAIAgent()
+    
     elif provider == "anthropic":
-        try:
-            from ai_agent import AnthropicAgent
-            return AnthropicAgent()
-        except ValueError:
-            # Fall back to MockAIAgent if API key not configured
-            return MockAIAgent()
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "ANTHROPIC_API_KEY not found in environment variables. "
+                "Please set it in your .env file."
+            )
+        return AnthropicAgent()
+    
     else:
-        # Use MockAIAgent for testing/development
-        return MockAIAgent()
+        raise ValueError(
+            f"Invalid AI_PROVIDER: {provider}. "
+            "Supported providers: 'openai', 'anthropic'"
+        )
 
 ai_agent = get_ai_agent()
 product_service = ProductService()

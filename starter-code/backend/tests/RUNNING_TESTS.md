@@ -36,12 +36,12 @@ python -m pytest test_sse_streaming.py -v
 
 ### Run Specific Test Class
 ```bash
-python -m pytest test_ai_agent.py::TestMockAIAgent -v
+python -m pytest test_ai_agent.py::TestOpenAIAgent -v
 ```
 
 ### Run Specific Test
 ```bash
-python -m pytest test_ai_agent.py::TestMockAIAgent::test_mock_agent_stream_response -v
+python -m pytest test_ai_agent.py::TestOpenAIAgent::test_openai_agent_initializes -v
 ```
 
 ### Run Only Passing Tests

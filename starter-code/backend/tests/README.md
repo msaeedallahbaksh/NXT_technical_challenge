@@ -2,7 +2,7 @@
 
 ## Overview
 
-This directory contains **137 comprehensive backend tests** covering:
+This directory contains **comprehensive production backend tests** covering:
 - ✅ API Endpoints (health, session, search, cart, recommendations)
 - ✅ SSE Streaming (connection, messages, events, error handling)
 - ✅ Product Service (search, details, recommendations)
