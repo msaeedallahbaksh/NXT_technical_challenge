@@ -227,15 +227,23 @@ IMPORTANT CONVERSATION RULES:
 3. Be conversational and enthusiastic about helping
 4. After tool results, comment on what was found or done
 
+SEARCH FUNCTION USAGE:
+- When user wants to browse a category (e.g., "show me electronics", "what clothing do you have"), use only the category parameter, leave query empty or omit it
+- When user searches by name/keyword (e.g., "wireless headphones"), use the query parameter
+- You can combine both: query="wireless" AND category="electronics"
+
 EXAMPLES:
+User: "show me electronics" or "what electronics do you have"
+You: "Let me browse our electronics section for you! 📱💻" [call search_products with category="electronics", no query]
+
 User: "search for headphones"
-You: "Let me find some great headphones for you! 🎧" [then call search_products]
+You: "Let me find some great headphones for you! 🎧" [call search_products with query="headphones"]
+
+User: "wireless headphones in electronics"  
+You: "Let me search for wireless headphones in our electronics! 🎧" [call search_products with query="wireless headphones", category="electronics"]
 
 User: "add the first one to my cart"  
-You: "Perfect choice! I'll add that to your cart right away! 🛒" [then call add_to_cart]
-
-User: "show me product details"
-You: "Let me get all the details for you! ✨" [then call show_product_details]
+You: "Perfect choice! I'll add that to your cart right away! 🛒" [call add_to_cart]
 
 Always be helpful, enthusiastic, and conversational!"""
         
@@ -270,17 +278,17 @@ Always be helpful, enthusiastic, and conversational!"""
                 "type": "function",
                 "function": {
                     "name": "search_products",
-                    "description": "Search for products in the catalog based on keywords, category, or other criteria. Use this when the user wants to find or browse products.",
+                    "description": "Search for products in the catalog. Can search by keywords, browse by category, or both. Use this when the user wants to find or browse products.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "Search query (product name, keywords, features)"
+                                "description": "Search query for product name, keywords, or features. Optional - leave empty when browsing by category only."
                             },
                             "category": {
                                 "type": "string",
-                                "description": "Product category to filter by",
+                                "description": "Product category to filter by. Use this when the user wants to browse or filter by category (e.g., 'show me electronics', 'clothing items', 'books section').",
                                 "enum": ["electronics", "clothing", "home", "books", "sports", "beauty"]
                             },
                             "limit": {
@@ -289,7 +297,7 @@ Always be helpful, enthusiastic, and conversational!"""
                                 "default": 10
                             }
                         },
-                        "required": ["query"]
+                        "required": []
                     }
                 }
             },
@@ -685,15 +693,23 @@ IMPORTANT CONVERSATION RULES:
 3. Be conversational and enthusiastic about helping
 4. After tool results, comment on what was found or done
 
+SEARCH FUNCTION USAGE:
+- When user wants to browse a category (e.g., "show me electronics", "what clothing do you have"), use only the category parameter, leave query empty or omit it
+- When user searches by name/keyword (e.g., "wireless headphones"), use the query parameter
+- You can combine both: query="wireless" AND category="electronics"
+
 EXAMPLES:
+User: "show me electronics" or "what electronics do you have"
+You: "Let me browse our electronics section for you! 📱💻" [call search_products with category="electronics", no query]
+
 User: "search for headphones"
-You: "Let me find some great headphones for you! 🎧" [then call search_products]
+You: "Let me find some great headphones for you! 🎧" [call search_products with query="headphones"]
+
+User: "wireless headphones in electronics"  
+You: "Let me search for wireless headphones in our electronics! 🎧" [call search_products with query="wireless headphones", category="electronics"]
 
 User: "add the first one to my cart"  
-You: "Perfect choice! I'll add that to your cart right away! 🛒" [then call add_to_cart]
-
-User: "show me product details"
-You: "Let me get all the details for you! ✨" [then call show_product_details]
+You: "Perfect choice! I'll add that to your cart right away! 🛒" [call add_to_cart]
 
 Always be helpful, enthusiastic, and conversational!"""
         
@@ -723,17 +739,17 @@ Always be helpful, enthusiastic, and conversational!"""
         return [
             {
                 "name": "search_products",
-                "description": "Search for products in the catalog based on keywords, category, or other criteria. Use this when the user wants to find or browse products.",
+                "description": "Search for products in the catalog. Can search by keywords, browse by category, or both. Use this when the user wants to find or browse products.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Search query (product name, keywords, features)"
+                            "description": "Search query for product name, keywords, or features. Optional - leave empty when browsing by category only."
                         },
                         "category": {
                             "type": "string",
-                            "description": "Product category to filter by",
+                            "description": "Product category to filter by. Use this when the user wants to browse or filter by category (e.g., 'show me electronics', 'clothing items', 'books section').",
                             "enum": ["electronics", "clothing", "home", "books", "sports", "beauty"]
                         },
                         "limit": {
@@ -742,7 +758,7 @@ Always be helpful, enthusiastic, and conversational!"""
                             "default": 10
                         }
                     },
-                    "required": ["query"]
+                    "required": []
                 }
             },
             {
