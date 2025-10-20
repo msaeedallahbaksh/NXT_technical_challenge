@@ -41,7 +41,8 @@ from rate_limit_config import RateLimitConfig, get_rate_limit_error_message
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
-    await init_db()
+    if not os.getenv("SKIP_DB_INIT", "false").lower() == "true":
+        await init_db()
     yield
     # Shutdown
 
